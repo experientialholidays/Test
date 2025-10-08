@@ -3,6 +3,7 @@ from datetime import datetime
 from agents import Agent, function_tool
 from vector_db import VectorDBManager
 from vectordb_query_selector_agent import vectordb_query_selector_agent
+from vectordb_filtering_agent import vectordb_filtering_agent
 # Configuration
 MODEL = "gpt-4.1-mini"
 DB_FOLDER = "input"
@@ -17,29 +18,25 @@ INSTRUCTIONS = f"""You are a helpful AI assistant for Auroville events and activ
 Today's date is {datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")}.
 
 Your role is to help users find information about events, activities, workshops, and schedules in Auroville.
-When users ask about events or activities, use the `vectordb_query_selector_agent` tool to generate the input query for vector db and then use
-`search_auroville_events` tool to find relevant information.
 
-Use the following rules while filtering the data :-
-1) Use the 'vectordb_query_selector_agent' tool first to generate the input query required for searching in vector db.
-2) Then use the tool  'search_auroville_events' to find the top relevant matchies from vector db.
-3) Monday—Saturday means all the week days from Monday to Saturday. So if user is asking for say thursday event, then Monday-Saturday should also be considered
-4) Appointment event means that they are on appointment basis and these events should also be considered for any date and weekday if user is interested in this type of event
-5) Provide clear, consise, and helpful responses based on the information you retrieve. 
-6) If you don't find relevant information, politely let the user know 
-7) Until user asks for description, donot provide the detailed description of events
+You have access to three tools:
+1) `vectordb_query_selector_agent` - Generates the best possible refined search query based on the user input.
+2) `search_auroville_events` - Retrieves relevant events from the vector database.
+3) `vectordb_filtering_agent` - Filters, organizes, and presents the final information to the user clearly.
 
-You **must always** use the tool `vectordb_query_selector_agent` to first transform any user query about events, dates, or schedules into a **refined search query**. 
-Then you **must** use the `search_auroville_events` tool with that refined query to fetch results.
+**Usage Rules:**
+1. Always start by using `vectordb_query_selector_agent` to refine any user query about events, dates, or schedules.
+2. Use `search_auroville_events` with that refined query to fetch relevant results.
+3. Then call `vectordb_filtering_agent` to process and present the filtered, user-friendly output.
+4. If the user asks about something unrelated to events or Auroville, reply conversationally without using tools.
+5. If no relevant events are found, politely inform the user.
 
-Example reasoning chain:
+Example workflow:
 1. User asks: "What's happening today?"
-2. You call `vectordb_query_selector_agent` with "today's events in Auroville"
-3. You take its response (refined query text)
-4. You call `search_auroville_events` using that query
-5. You summarize results clearly.
-
-If the user asks anything unrelated to events, respond conversationally without tools.
+2. Call `vectordb_query_selector_agent` with "today's events in Auroville"
+3. Use its response with `search_auroville_events`
+4. Pass results to `vectordb_filtering_agent`
+5. Return the filtered summary to the user.
 """
 
 @function_tool
@@ -74,7 +71,8 @@ def search_auroville_events(query: str) -> str:
 
 
 tools = [search_auroville_events,
-         vectordb_query_selector_agent.as_tool(tool_name="vectordb_query_selector_agent", tool_description="Generates a input query for the vector db search")]
+         vectordb_query_selector_agent.as_tool(tool_name="vectordb_query_selector_agent", tool_description="Generates a input query for the vector db search"),
+         vectordb_filtering_agent.as_tool(tool_name="vectordb_filtering_agent", tool_description="Formats and filter out the vector db results for user")]
 # -----------------------------
 # CREATE AGENT
 # -----------------------------
