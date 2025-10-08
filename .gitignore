@@ -185,3 +185,4 @@ cython_debug/
 notebooks/
 sandbox/
 vector_db/
+sessions.db
