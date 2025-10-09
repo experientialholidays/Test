@@ -4,6 +4,13 @@ from agents import Agent, function_tool
 from vector_db import VectorDBManager
 from vectordb_query_selector_agent import vectordb_query_selector_agent
 from vectordb_filtering_agent import vectordb_filtering_agent
+from openai import AsyncOpenAI
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 # Configuration
 MODEL = "gpt-4.1-mini"
 DB_FOLDER = "input"
@@ -20,13 +27,13 @@ Today's date is {datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")}.
 Your role is to help users find information about events, activities, workshops, and schedules in Auroville.
 
 You have access to three tools:
-1) `vectordb_query_selector_agent` - Generates the best possible refined search query based on the user input.
+1) `vectordb_query_selector_agent` - Generates the best possible refined search query and specificity based on the user input.
 2) `search_auroville_events` - Retrieves relevant events from the vector database.
 3) `vectordb_filtering_agent` - Filters, organizes, and presents the final information to the user clearly.
 
 **Usage Rules:**
 1. Always start by using `vectordb_query_selector_agent` to refine any user query about events, dates, or schedules.
-2. Use `search_auroville_events` with that refined query to fetch relevant results.
+2. Use `search_auroville_events` with that refined query and specificity to fetch relevant results.
 3. Then call `vectordb_filtering_agent` to process and present the filtered, user-friendly output.
 4. If the user asks about something unrelated to events or Auroville, reply conversationally without using tools.
 5. If no relevant events are found, politely inform the user.
@@ -40,21 +47,27 @@ Example workflow:
 """
 
 @function_tool
-def search_auroville_events(query: str) -> str:
+def search_auroville_events(search_query: str,specificity: str = "Broad") -> str:
     """
     Search for information about Auroville events and activities. 
     Use this tool whenever the user asks about events, activities, schedules, or anything related to Auroville.
     
     Args:
-        query: The search query about Auroville events (e.g., 'dance events in October', 'music workshops', 'yoga classes')
+        search_query: The search query about Auroville events (e.g., 'dance events in October', 'music workshops', 'yoga classes')
+        specificity: Determine query specificity:
+                    - Broad (general date/day queries)
+                    - Specific (particular event/activity queries)
         
     Returns:
         str: Relevant information about Auroville events
     """
-    print(f"RAG Tool called with query: {query}")
+    logger.info(f"RAG Tool called with query: {search_query}")
     
+    # Dynamically adjust retrieval depth
+    k_value = 50 if specificity.lower() == "broad" else 10
     # Retrieve relevant documents (uses k=50 from retriever config)
-    docs = retriever.get_relevant_documents(query)
+    docs = retriever.get_relevant_documents(search_query,k=k_value)
+
     
     if not docs:
         return "No relevant information found about Auroville events."
@@ -65,7 +78,7 @@ def search_auroville_events(query: str) -> str:
         for i, doc in enumerate(docs)
     ])
     
-    print(f"📚 Retrieved {len(docs)} documents for RAG context")
+    logger.info(f"Retrieved {len(docs)} documents for RAG context")
     
     return f"Here is relevant information about Auroville events:\n\n{context}"
 

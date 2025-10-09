@@ -1,7 +1,15 @@
 from datetime import datetime
-from agents import Agent, function_tool
+from agents import Agent, function_tool,OpenAIChatCompletionsModel
+from openai import AsyncOpenAI
+import os
 # Configuration
 MODEL = "gpt-4.1-mini"
+google_api_key = os.getenv('GOOGLE_API_KEY')
+
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
+gemini_model = OpenAIChatCompletionsModel(model="gemini-2.5-flash", openai_client=gemini_client)
+
 
 INSTRUCTIONS = f"""You are an analytical assistant with deep knowledge of events and activities happening in Auroville, India.  
 Today's date is {datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")}.
@@ -22,4 +30,4 @@ Your task:
 
 Your goal is to ensure that users can easily discover what's happening in Auroville without being overwhelmed with unnecessary information.
 """
-vectordb_filtering_agent = Agent(name="vectordb_query_selector_agent", instructions=INSTRUCTIONS, model=MODEL)
+vectordb_filtering_agent = Agent(name="vectordb_query_selector_agent", instructions=INSTRUCTIONS, model=gemini_model)

@@ -7,6 +7,10 @@ from vector_db import VectorDBManager
 from db import SessionDBManager
 from session_handler import SessionHandler
 from auroville_agent import auroville_agent
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv(override=True)
@@ -25,10 +29,10 @@ async def streaming_chat(question, history, session_id):
     Handle streaming chat using OpenAI Agents SDK with real streaming.
     This is an async generator that Gradio can handle natively.
     """
-    print(f'Processing chat for session: {session_id}')
+    logger.info(f'Processing chat for session: {session_id}')
     
     if not session_id or session_id == "null":
-        print("ERROR: No valid session_id!")
+        logger.info("ERROR: No valid session_id!")
         return
     
     # Save user message
@@ -47,7 +51,7 @@ async def streaming_chat(question, history, session_id):
         # Stream using Agent directly
         trace_id = gen_trace_id()
         with trace("Auroville chatbot", trace_id=trace_id):
-            print(f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}")
+            logger.info(f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}")
             # trace_msg = f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}"
             # updated_history = history.copy()
             # updated_history.append({"role": "user", "content": question})
@@ -82,7 +86,7 @@ async def streaming_chat(question, history, session_id):
         
     except Exception as e:
         error_msg = f"I encountered an error: {str(e)}. Please try again."
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
         updated_history = history.copy()
         updated_history.append({"role": "user", "content": question})
         updated_history.append({"role": "assistant", "content": error_msg})
@@ -124,5 +128,5 @@ if __name__ == "__main__":
         # Clear chat (UI only)
         clear.click(lambda: [], None, chatbot)
 
-    print("App started with OpenAI Agents SDK - Real Streaming Enabled")
+    logger.info("App started with OpenAI Agents SDK - Real Streaming Enabled")
     demo.launch(inbrowser=True, debug=True)

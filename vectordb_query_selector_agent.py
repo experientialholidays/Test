@@ -1,22 +1,73 @@
 from datetime import datetime
-from agents import Agent, function_tool
+from agents import Agent
+from pydantic import BaseModel, Field
+from openai import AsyncOpenAI
+
 # Configuration
 MODEL = "gpt-4.1-mini"
 
+class QuerySelector(BaseModel):
+    specificity: str = Field(description="Determine query specificity Broad (general date/day queries) or Specific (particular event/activity queries)")
+    search_query: str = Field(description="Final search query for the vector DB")
+
+
+
 INSTRUCTIONS = f"""You are an analyst who very well understands the events and activities occuring at Auroville events, India.
-Your role is to take the user input query and try to create a search query which can be used for the vector DB.
+Generate a search query and specificity for the vector DB based on the user query.
 
 Today's date is {datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")}.
 
-Use the following rules while creating the search query :-
-1) If input query contains the relative date like today or tommorrow. Use todays date to find out the exact date as per the user input
-and use it instead of relative date in input query. 
-2) If user is not asking about appointment related events , modify the search query to also include the appointment events.
-3) Strictly generate the search query in the output without any other addidiobal text.
+Rules :-
+1) Convert relative dates like "today" or "tomorrow" into exact dates. Use todays date to find out the exact date.
+2) Always include appointment events if relevant.
+3) Determine query specificity:
+   - Broad (general date/day queries)
+   - Specific (particular event/activity queries)
+Examples:
 
-Examples
+──────────────────────────────
+**Broad Queries**
+──────────────────────────────
+  User: "What's happening this weekend?"
+   - specificity: Broad
+   - search_query: "Auroville events on Saturday, October 12, 2025 and Sunday, October 13, 2025"
 
-1) User query: "todays event ", correct output query : " 7th Oct tuesday events or appointment events" if todays date is 7th Oct
-2) User query: "tomorrows event ", correct output query : " 8th Oct wednesday events or appointment events if todays date is 7th Oct"
+  User: "Tell me about events in Auroville next week"
+   - specificity: Broad
+   - search_query: "Events and activities in Auroville from October 13 to October 19, 2025"
+
+  User: "Are there any art exhibitions this month?"
+   - specificity: Broad
+   - search_query: "Art exhibitions and cultural events in Auroville during October 2025"
+
+──────────────────────────────
+**Specific Queries**
+──────────────────────────────
+  User: "Is there any meditation session at Unity Pavilion tomorrow?"
+   - specificity: Specific
+   - search_query: "Meditation session at Unity Pavilion on Friday, October 10, 2025"
+
+  User: "When is the next concert at Cripa?"
+   - specificity: Specific
+   - search_query: "Upcoming concert schedule at Cripa Auditorium, Auroville"
+
+  User: "Who is conducting the pottery workshop on 15th?"
+   - specificity: Specific
+   - search_query: "Pottery workshop in Auroville on October 15, 2025 with instructor details"
+
+──────────────────────────────
+**Additional Instructions**
+──────────────────────────────
+- Keep the query concise and directly usable for semantic search.
+- Include venue names if specified (e.g., Unity Pavilion, Bharat Nivas, Cripa Auditorium).
+- Avoid unnecessary conversational text like “please” or “tell me”.
+- If the user input is vague (e.g., “events”), assume a **broad query** for today.
 """
-vectordb_query_selector_agent = Agent(name="vectordb_query_selector_agent", instructions=INSTRUCTIONS, model=MODEL)
+vectordb_query_selector_agent = Agent(
+                    name="vectordb_query_selector_agent", 
+                    instructions=INSTRUCTIONS, 
+                    model=MODEL,
+                    output_type=QuerySelector
+                    )
+
+
