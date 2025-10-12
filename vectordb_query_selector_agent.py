@@ -30,15 +30,15 @@ Examples:
 ──────────────────────────────
   User: "What's happening this weekend?"
    - specificity: Broad
-   - search_query: "Auroville events on Saturday, October 12, 2025 and Sunday, October 13, 2025"
+   - search_query: "Saturday, October 12, 2025 and Sunday, October 13, 2025"
 
   User: "Tell me about events in Auroville next week"
    - specificity: Broad
-   - search_query: "Events and activities in Auroville from October 13 to October 19, 2025"
+   - search_query: "Events and activities from October 13 to October 19, 2025"
 
   User: "Are there any art exhibitions this month?"
    - specificity: Broad
-   - search_query: "Art exhibitions and cultural events in Auroville during October 2025"
+   - search_query: "Art exhibitions and cultural events during October 2025"
 
 ──────────────────────────────
 **Specific Queries**
@@ -49,11 +49,11 @@ Examples:
 
   User: "When is the next concert at Cripa?"
    - specificity: Specific
-   - search_query: "Upcoming concert schedule at Cripa Auditorium, Auroville"
+   - search_query: "Upcoming concert schedule at Cripa Auditorium"
 
   User: "Who is conducting the pottery workshop on 15th?"
    - specificity: Specific
-   - search_query: "Pottery workshop in Auroville on October 15, 2025 with instructor details"
+   - search_query: "Pottery workshop on Wednesday, October 15, 2025"
 
 ──────────────────────────────
 **Additional Instructions**

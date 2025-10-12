@@ -31,19 +31,42 @@ You have access to three tools:
 2) `search_auroville_events` - Retrieves relevant events from the vector database.
 3) `vectordb_filtering_agent` - Filters, organizes, and presents the final information to the user clearly.
 
-**Usage Rules:**
-1. Always start by using `vectordb_query_selector_agent` to refine any user query about events, dates, or schedules.
-2. Use `search_auroville_events` with that refined query and specificity to fetch relevant results.
-3. Then call `vectordb_filtering_agent` to process and present the filtered, user-friendly output.
-4. If the user asks about something unrelated to events or Auroville, reply conversationally without using tools.
-5. If no relevant events are found, politely inform the user.
+**CRITICAL WORKFLOW - Follow this exact sequence:**
 
-Example workflow:
-1. User asks: "What's happening today?"
-2. Call `vectordb_query_selector_agent` with "today's events in Auroville"
-3. Use its response with `search_auroville_events`
-4. Pass results to `vectordb_filtering_agent`
-5. Return the filtered summary to the user.
+Step 1: Call `vectordb_query_selector_agent` with the user's question
+   - This will return a refined search query and specificity level
+
+Step 2: Call `search_auroville_events` using:
+   - search_query: The refined query from Step 1
+   - specificity: The specificity level from Step 1
+
+Step 3: Call `vectordb_filtering_agent` with:
+   - user_query: The original user question
+   - raw_results: The COMPLETE output from `search_auroville_events` in Step 2
+   
+   **IMPORTANT**: You MUST pass the ENTIRE search results text to the filtering agent.
+   The filtering agent needs the raw data to filter and format it properly.
+
+Step 4: Return the filtering agent's response to the user
+
+**Example:**
+User: "What's happening today?"
+
+1. Call vectordb_query_selector_agent("What's happening today?")
+   → Returns: {{"search_query": "events in Auroville on October 12, 2025", "specificity": "Broad"}}
+
+2. Call search_auroville_events(search_query="events in Auroville on October 12, 2025", specificity="Broad")
+   → Returns: "Here is relevant information about Auroville events:\n\nDocument 1: Dance workshop...\nDocument 2: Yoga class..."
+
+3. Call vectordb_filtering_agent(
+     user_query="What's happening today?",
+     raw_results="Here is relevant information about Auroville events:\n\nDocument 1: Dance workshop...\nDocument 2: Yoga class..."
+   )
+   → Returns: Filtered and formatted response
+
+4. Return that filtered response to the user
+
+If the user asks about something unrelated to events, reply conversationally without using tools.
 """
 
 @function_tool
@@ -85,7 +108,7 @@ def search_auroville_events(search_query: str,specificity: str = "Broad") -> str
 
 tools = [search_auroville_events,
          vectordb_query_selector_agent.as_tool(tool_name="vectordb_query_selector_agent", tool_description="Generates a input query for the vector db search"),
-         vectordb_filtering_agent.as_tool(tool_name="vectordb_filtering_agent", tool_description="Formats and filter out the vector db results for user")]
+         vectordb_filtering_agent.as_tool(tool_name="vectordb_filtering_agent", tool_description="Filters and formats raw vector database results for the user. Requires 'user_query' (original question) and 'raw_results' (complete search output) as inputs.")]
 # -----------------------------
 # CREATE AGENT
 # -----------------------------
