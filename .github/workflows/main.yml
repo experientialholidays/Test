@@ -15,9 +15,7 @@ jobs:
           lfs: true
 
       - name: Push to hub
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-    run: |
-      git remote add hf "https://Auro-connect:${HF_TOKEN}@huggingface.co/Auro-connect/Auroville_chatbot"
+    env: HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    run: git remote add hf "https://Auro-connect:${HF_TOKEN}@huggingface.co/Auro-connect/Auroville_chatbot"
       git push hf main
           
