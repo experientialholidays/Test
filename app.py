@@ -130,13 +130,12 @@ if __name__ == "__main__":
 
     logger.info("App started with OpenAI Agents SDK - Real Streaming Enabled")
     
-    # --- START OF CHANGE ---
-    # Cloud Run automatically sets the PORT variable
-    # We must read it and bind the Gradio server to 0.0.0.0 (all interfaces) and the specified port.
-    server_port = int(os.environ.get("PORT", 7860))  # Gradio often defaults to 7860, but use PORT from environment
+    # --- START OF CLOUD RUN FIX ---
+    # Cloud Run requires the server to listen on 0.0.0.0 and the port specified by the PORT environment variable (usually 8080).
+    server_port = int(os.environ.get("PORT", 8080))
     server_host = "0.0.0.0"
     
-    # Updated launch command
+    # Launch Gradio on the mandatory host and port
+    # Set debug=False and inbrowser=False for production environment
     demo.launch(server_name=server_host, server_port=server_port, inbrowser=False, debug=False)
-    # --- END OF CHANGE ---
-
+    # --- END OF CLOUD RUN FIX ---
