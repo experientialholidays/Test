@@ -8,15 +8,47 @@ on:
 jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v3
+      # Step 1: Checkout the GitHub repo
+      - name: Checkout repository
+        uses: actions/checkout@v3
         with:
           fetch-depth: 0
           lfs: true
 
-      - name: Push to hub
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-    run: |
-      git remote add hf "https://Auro-connect:${HF_TOKEN}@huggingface.co/Auro-connect/ghAuroville_chatbot"
-      git push hf main
+      # Step 2: Install Hugging Face Hub CLI (optional but convenient)
+      - name: Install Hugging Face Hub CLI
+        run: |
+          pip install --upgrade huggingface_hub
+
+      # Step 3: Create repo on Hugging Face if it doesn't exist
+      - name: Ensure Hugging Face repo exists
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python - <<'EOF'
+          from huggingface_hub import HfApi
+          import os
+
+          api = HfApi()
+          token = os.environ["HF_TOKEN"]
+          repo_id = "Auro-connect/ghAuroville_chatbot"
+
+          # Check if repo exists, otherwise create it
+          try:
+              api.repo_info(repo_id)
+              print(f"✅ Repo {repo_id} already exists.")
+          except Exception:
+              print(f"🚀 Creating repo {repo_id} on Hugging Face Hub...")
+              api.create_repo(repo_id, token=token, private=False)
+              print(f"✅ Repo created successfully.")
+          EOF
+
+      # Step 4: Push your main branch to the Hugging Face repo
+      - name: Push to Hugging Face Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git remote add hf "https://Auro-connect:${HF_TOKEN}@huggingface.co/Auro-connect/ghAuroville_chatbot"
+          git push hf main --force
