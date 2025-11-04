@@ -15,4 +15,4 @@ COPY . .
 ENV PORT=8080
 
 # Run your app (change main.py and app name accordingly)
-CMD ["gunicorn", "-b", ":8080", "main:app"]
+CMD ["gunicorn", "-b", ":8080", "app:app"]
