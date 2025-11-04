@@ -3,26 +3,35 @@ name: Sync to Hugging Face Hub
 on:
   push:
     branches:
-      - main  # Or whichever branch you want to sync from
+      - main
 
 jobs:
   sync-to-hub:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the GitHub repo
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
           fetch-depth: 0
-          lfs: true
+          lfs: true  # ✅ Important to pull LFS-tracked files correctly
 
-      # Step 2: Install Hugging Face Hub CLI (optional but convenient)
-      - name: Install Hugging Face Hub CLI
+      - name: Install dependencies
         run: |
-          pip install --upgrade huggingface_hub
+          sudo apt-get update
+          sudo apt-get install git-lfs -y
+          git lfs install
 
-      # Step 3: Create repo on Hugging Face if it doesn't exist
+      - name: Track binary files
+        run: |
+          git lfs track "*.xlsx"
+          git add .gitattributes
+          git add input/whatapp\ group\ event\ details.xlsx
+          git commit -m "Track binary files with Git LFS" || echo "No changes to commit"
+
+      - name: Install Hugging Face Hub CLI
+        run: pip install --upgrade huggingface_hub
+
       - name: Ensure Hugging Face repo exists
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -35,7 +44,6 @@ jobs:
           token = os.environ["HF_TOKEN"]
           repo_id = "Auro-connect/ghAuroville_chatbot"
 
-          # Check if repo exists, otherwise create it
           try:
               api.repo_info(repo_id)
               print(f"✅ Repo {repo_id} already exists.")
@@ -45,7 +53,6 @@ jobs:
               print(f"✅ Repo created successfully.")
           EOF
 
-      # Step 4: Push your main branch to the Hugging Face repo
       - name: Push to Hugging Face Hub
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
