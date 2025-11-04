@@ -14,5 +14,5 @@ COPY . .
 # Expose port 8080 (Cloud Run expects this)
 ENV PORT=8080
 
-# Run your app (change main.py and app name accordingly)
-CMD ["gunicorn", "-b", ":8080", "app:app"]
+# Start your Gradio app directly
+CMD ["python", "app.py"]
