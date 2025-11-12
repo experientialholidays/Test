@@ -103,10 +103,24 @@ def search_auroville_events(
     filter_location: Optional[str] = None
 ) -> str:
     """
+    Search for information about events and activities. 
+    
+    If `specificity` is "Broad", the search will include metadata filters (day OR date OR location) to maximize event discovery using OR logic.
+    
+    Args:
+        search_query: The search query about Auroville events (e.g., 'yoga classes').
+        specificity: Broad or specfic as per input.
+        filter_day: Optional. The specific day of the week to filter by (e.g., 'Monday').
+        filter_date: Optional. The specific date to filter by (e.g., 'October 26').
+        filter_location: Optional. The location or venue to filter by (e.g., 'Town Hall').
+        
+    Returns:
+        str: Relevant information about Auroville events.
+        
     Searches events, CACHES them in memory, and returns formatted text.
     """
     # ... (Search Logic same as before) ...
-    k_value = 100 if specificity.lower() == "broad" else 15
+    k_value = 100 if specificity.lower() == "broad" else 12
     chroma_filter = {}
     simple_filters = {}
 
