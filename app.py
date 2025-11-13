@@ -1,4 +1,4 @@
-Import gradio as gr
+import gradio as gr
 import asyncio
 import os
 from dotenv import load_dotenv
