@@ -43,6 +43,10 @@ class VectorDBManager:
                         day_raw = str(row.get("day", "N/A"))
                         date = str(row.get("date", "N/A"))
                         location = str(row.get("location", "N/A"))
+                        title = str(row.get("title", "N/A"))
+                        time = str(row.get("time", "N/A"))
+                        contribution = str(row.get("contribution", "N/A"))
+                        phone = str(row.get("phone", ""))
 
                         # ✅ NEW LOGIC: expand multi-day cells like '["Monday", "Tuesday"]'
                         if isinstance(day_raw, str) and day_raw.startswith("[") and day_raw.endswith("]"):
@@ -67,6 +71,10 @@ class VectorDBManager:
                                         "day": single_day,
                                         "date": date.strip(),
                                         "location": location.strip(),
+                                        "title": title.strip(),
+                                        "time": time.strip(),
+                                        "contribution": contribution.strip(),
+                                        "phone": phone.strip(), # needed for the WhatsApp link
                                     },
                                 )
                             )
