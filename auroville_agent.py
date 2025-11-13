@@ -1,6 +1,8 @@
+
 import os
 import logging
 import urllib.parse
+import ast
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -8,6 +10,7 @@ from agents import Agent, function_tool, OpenAIChatCompletionsModel
 from vector_db import VectorDBManager
 from vectordb_query_selector_agent import vectordb_query_selector_agent 
 from openai import AsyncOpenAI
+from langchain_core.documents import Document # Added for type hinting
 
 # -------------------------------------------------------------------------
 # 1. Setup & Global Cache
@@ -16,9 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- IN-MEMORY CACHE FOR EVENTS ---
-# Keys: URLEncoded Titles (e.g., "Clay%20Workshop")
-# Values: The full Document object (metadata + page_content)
-EVENT_DATA_STORE = {} 
+EVENT_DATA_STORE: Dict[str, Document] = {} 
 
 VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
@@ -27,32 +28,64 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 google_api_key = os.getenv('GOOGLE_API_KEY')
 
 db_manager = VectorDBManager(folder=DB_FOLDER, db_name=VECTOR_DB_NAME)
-vectorstore = db_manager.create_or_load_db(force_refresh=False)
-retriever = db_manager.get_retriever(k=50)
+# NOTE: The actual vectorstore loading (db_manager.create_or_load_db) is in app.py.
+# We just initialize the retriever here.
+retriever = db_manager.get_retriever(k=50) 
 
 gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
 
 # -------------------------------------------------------------------------
-# 2. Formatting Helpers
+# 2. Formatting Helpers (Updated)
 # -------------------------------------------------------------------------
 
 def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     """
-    Strict Card Format for Full Details
+    Strict Card Format for Full Details, suppressing empty fields.
     """
-    title = doc_metadata.get('title', 'Event')
-    date_str = doc_metadata.get('date', 'Upcoming')
-    day_str = doc_metadata.get('day', '')
-    time_str = doc_metadata.get('time', '')
-    location = doc_metadata.get('location', 'Unknown Location')
-    contribution = doc_metadata.get('contribution', 'Check details')
-    contact_info = doc_metadata.get('contact', '')
+    # 1. Get all data, stripping whitespace and using safe defaults
+    title = doc_metadata.get('title', 'Event').strip()
+    date_str = doc_metadata.get('date', 'Upcoming').strip()
+    day_str = doc_metadata.get('day', '').strip()
+    time_str = doc_metadata.get('time', '').strip()
+    location = doc_metadata.get('location', 'Unknown Location').strip()
+    contribution = doc_metadata.get('contribution', 'Check details').strip()
+    contact_info = doc_metadata.get('contact', '').strip()
     description = doc_content.strip()
     poster_url = doc_metadata.get('poster_url', None)
-    phone_number = doc_metadata.get('phone', '')
+    phone_number = doc_metadata.get('phone', '').strip()
 
+    output_lines = []
+    
+    # Define common placeholders to ignore
+    placeholders = {'n/a', 'unknown location', 'upcoming', 'check details'}
+
+    # 2. Event Name (Always included, uses default 'Event' if missing)
+    output_lines.append(f"**Event Name:** {title}")
+
+    # 3. When/Time Section (Conditional)
+    when_parts = []
+    if day_str and day_str.lower() not in placeholders:
+        when_parts.append(day_str)
+    if date_str and date_str.lower() not in placeholders:
+        when_parts.append(date_str)
+    if time_str and time_str.lower() not in placeholders:
+        when_parts.append(f"@ {time_str}")
+        
+    if when_parts:
+        output_lines.append(f"**When:** {' '.join(when_parts)}")
+    
+    # 4. Location (Conditional)
+    if location and location.lower() not in placeholders:
+        output_lines.append(f"**Where:** {location}")
+
+    # 5. Contribution (Conditional)
+    if contribution and contribution.lower() not in placeholders:
+        output_lines.append(f"**Contribution:** {contribution}")
+        
+    # 6. Contact & WhatsApp (Conditional)
     wa_section = ""
+    clean_phone = ''
     if phone_number:
         clean_phone = ''.join(filter(str.isdigit, str(phone_number)))
         if clean_phone:
@@ -60,39 +93,71 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
             encoded_msg = urllib.parse.quote(msg)
             wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
             wa_section = f"\n[**Click to Chat on WhatsApp**]({wa_url})"
+            
+    # Include Contact line only if contact_info exists OR if a WhatsApp link was created
+    if contact_info or clean_phone:
+        contact_line = f"**Contact:** {contact_info}" if contact_info else "**Contact:**"
+        output_lines.append(f"{contact_line}{wa_section}")
 
-    card = f"""
-**Event Name:** {title}
-**When:** {day_str}, {date_str} @ {time_str}
-**Where:** {location}
-**Contribution:** {contribution}
-**Contact:** {contact_info}{wa_section}
+    # 7. Description (Always included, even if empty)
+    output_lines.append("\n**Description:**")
+    output_lines.append(description)
 
-**Description:**
-{description}
-"""
-    if poster_url:
-        card += f"\n\n![Event Poster]({poster_url})"
+    # 8. Poster URL
+    if poster_url and poster_url.lower() != 'none':
+        output_lines.append(f"\n\n![Event Poster]({poster_url})")
     
-    return card.strip()
+    # Filter out empty strings and join
+    return "\n".join(filter(None, output_lines)).strip()
+
 
 def format_summary_line(doc_metadata: Dict) -> str:
     """
-    Formats the summary line with a SPECIAL fetch link.
+    Formats the summary line with a SPECIAL fetch link, including key info.
     """
-    title = doc_metadata.get('title', 'Event')
-    day = doc_metadata.get('day', '')
-    time = doc_metadata.get('time', '')
-    loc = doc_metadata.get('location', '')
+    title = doc_metadata.get('title', 'Event').strip()
+    day = doc_metadata.get('day', '').strip()
+    time = doc_metadata.get('time', '').strip()
+    loc = doc_metadata.get('location', '').strip()
+    contribution = doc_metadata.get('contribution', '').strip() # NEW
+    phone_number = doc_metadata.get('phone', '').strip() # NEW
     
+    placeholders = {'n/a', 'unknown location', 'upcoming', 'check details'}
+
     # Create a safe key for the cache lookup
     safe_key = urllib.parse.quote(title)
     
-    # Link format: #FETCH::EncodedTitle
-    return f"- [**{title}**](#FETCH::{safe_key}) | {day} {time} @ {loc}"
+    # Start with the fetch link
+    summary_parts = [f"- [**{title}**](#FETCH::{safe_key})"]
+    
+    # Add optional parts only if they exist and are not placeholders
+    details = []
+    
+    # 1. Day, Time, Location
+    if day and day.lower() not in placeholders:
+        details.append(day)
+    if time and time.lower() not in placeholders:
+        details.append(time)
+    if loc and loc.lower() not in placeholders:
+        details.append(f"@{loc}")
+    
+    # 2. Contribution (NEW)
+    if contribution and contribution.lower() not in placeholders:
+        details.append(f"| Contrib: {contribution}")
+        
+    # 3. Contact Phone (NEW, only if digits exist)
+    clean_phone = ''.join(filter(str.isdigit, str(phone_number)))
+    if clean_phone:
+        details.append(f"| Ph: {clean_phone}")
+    
+    if details:
+        summary_parts.append("|")
+        summary_parts.append(" ".join(details))
+        
+    return " ".join(summary_parts)
 
 # -------------------------------------------------------------------------
-# 3. Optimized Tool (Populates Cache)
+# 3. Optimized Tool (Full Body)
 # -------------------------------------------------------------------------
 @function_tool
 def search_auroville_events(
@@ -111,7 +176,7 @@ def search_auroville_events(
         search_query: The search query about Auroville events (e.g., 'yoga classes').
         specificity: Broad or specfic as per input.
         filter_day: Optional. The specific day of the week to filter by (e.g., 'Monday').
-        filter_date: Optional. The specific date to filter by (e.g., 'October 26').
+        filter_date: Optional. The specific date to filter by (e.g., 'November 13, 2025').
         filter_location: Optional. The location or venue to filter by (e.g., 'Town Hall').
         
     Returns:
@@ -119,17 +184,20 @@ def search_auroville_events(
         
     Searches events, CACHES them in memory, and returns formatted text.
     """
-    # ... (Search Logic same as before) ...
     k_value = 100 if specificity.lower() == "broad" else 12
     chroma_filter = {}
     simple_filters = {}
 
+    # Current date is Thursday, November 13, 2025
+    
     if filter_date:
         simple_filters["date"] = filter_date
         try:
             for fmt in ["%B %d, %Y", "%B %d"]:
                 try:
-                    parse_str = filter_date if "Y" in fmt else f"{filter_date}, {datetime.now().year}"
+                    # Use a robust way to parse the year for the current context
+                    current_year = datetime.now().year
+                    parse_str = filter_date if "Y" in fmt else f"{filter_date}, {current_year}"
                     dt = datetime.strptime(parse_str, fmt)
                     simple_filters["day"] = dt.strftime("%A")
                     break
@@ -169,7 +237,7 @@ def search_auroville_events(
         # Store in Global Cache (Overwrites old versions, which is good)
         EVENT_DATA_STORE[safe_key] = doc
         
-        # Handle internal list deduplication
+        # Handle internal list deduplication (e.g., same title, same date)
         dedup_key = (title, doc.metadata.get('date'))
         if dedup_key not in seen_keys:
             seen_keys.add(dedup_key)
@@ -191,10 +259,14 @@ def search_auroville_events(
             final_output.append(format_summary_line(doc.metadata))
             
         if specificity.lower() == "broad":
-            final_output.append("\n\n[**See daily & appointment-based events**](#trigger_broad_search)")
+            # Special link for broad search
+            final_output.append("\n\n[**See daily & appointment-based events**](#TRIGGER_SEARCH::daily and appointment-based events::Broad)")
 
     return "\n".join(final_output)
 
+# -------------------------------------------------------------------------
+# 4. Agent Instructions and Definition
+# -------------------------------------------------------------------------
 
 INSTRUCTIONS = f"""
 You are an **AI Event Information Extractor** dedicated to providing structured and accurate event details from the Auroville community.
@@ -211,12 +283,14 @@ You have access to two tools:
 
 ### **Workflow**
 
-1.  For event-related queries, first call **`vectordb_query_selector_agent`** with the user's question.
-2.  Then use **`search_auroville_events`** tool which is a vector DB with below parameters :
-    * **user_query**: The original user question
-    * **refined_search_query**: The refined query from step 1
-    * **specificity**: The specificity level from step 1
-3. **PASS THROUGH** the exact output from the tool. Do not reformat.
+1.  **SPECIAL RULE:** If the user's question is exactly "daily and appointment-based events", you **must skip** calling `vectordb_query_selector_agent` and directly call `search_auroville_events` with the following parameters:
+    * search_query: "daily and appointment-based events"
+    * specificity: "Broad"
+    * filter_day, filter_date, filter_location: null
+
+2.  For all other event-related queries, first call **`vectordb_query_selector_agent`** with the user's question.
+3.  Then use **`search_auroville_events`** tool with the outputs from step 1 or step 2.
+4. **PASS THROUGH** the exact output from the tool. Do not reformat.
 """
 
 tools = [
