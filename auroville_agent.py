@@ -1,4 +1,3 @@
-
 import os
 import logging
 import urllib.parse
@@ -10,15 +9,14 @@ from agents import Agent, function_tool, OpenAIChatCompletionsModel
 from vector_db import VectorDBManager
 from vectordb_query_selector_agent import vectordb_query_selector_agent 
 from openai import AsyncOpenAI
-from langchain_core.documents import Document # Added for type hinting
+from langchain_core.documents import Document 
 
 # -------------------------------------------------------------------------
-# 1. Setup & Global Cache
+# 1. Setup & Global Cache (Lazy Initialization Fix Applied Here)
 # -------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- IN-MEMORY CACHE FOR EVENTS ---
 EVENT_DATA_STORE: Dict[str, Document] = {} 
 
 VECTOR_DB_NAME = "vector_db"
@@ -27,23 +25,33 @@ MODEL = "gemini-2.5-flash"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 google_api_key = os.getenv('GOOGLE_API_KEY')
 
+# 1. Create the Manager
 db_manager = VectorDBManager(folder=DB_FOLDER, db_name=VECTOR_DB_NAME)
-# NOTE: The actual vectorstore loading (db_manager.create_or_load_db) is in app.py.
-# We just initialize the retriever here.
-retriever = db_manager.get_retriever(k=50) 
+
+# 2. CRITICAL FIX: Set the retriever to None at load time. app.py will set it later.
+retriever = None 
+
+def initialize_retriever(vectorstore):
+    """Initializes the global retriever instance after vectorstore creation."""
+    global retriever
+    if vectorstore:
+        # NOTE: Using the vectorstore object passed from app.py to create the retriever
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 50})
+        logger.info("Auroville agent retriever successfully initialized.")
+    else:
+        logger.error("Failed to initialize retriever: Vectorstore is None.")
 
 gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
 
 # -------------------------------------------------------------------------
-# 2. Formatting Helpers (Updated)
+# 2. Formatting Helpers (Updated Summary Line)
 # -------------------------------------------------------------------------
 
 def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     """
     Strict Card Format for Full Details, suppressing empty fields.
     """
-    # 1. Get all data, stripping whitespace and using safe defaults
     title = doc_metadata.get('title', 'Event').strip()
     date_str = doc_metadata.get('date', 'Upcoming').strip()
     day_str = doc_metadata.get('day', '').strip()
@@ -56,14 +64,10 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     phone_number = doc_metadata.get('phone', '').strip()
 
     output_lines = []
-    
-    # Define common placeholders to ignore
     placeholders = {'n/a', 'unknown location', 'upcoming', 'check details'}
 
-    # 2. Event Name (Always included, uses default 'Event' if missing)
     output_lines.append(f"**Event Name:** {title}")
 
-    # 3. When/Time Section (Conditional)
     when_parts = []
     if day_str and day_str.lower() not in placeholders:
         when_parts.append(day_str)
@@ -75,15 +79,12 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     if when_parts:
         output_lines.append(f"**When:** {' '.join(when_parts)}")
     
-    # 4. Location (Conditional)
     if location and location.lower() not in placeholders:
         output_lines.append(f"**Where:** {location}")
 
-    # 5. Contribution (Conditional)
     if contribution and contribution.lower() not in placeholders:
         output_lines.append(f"**Contribution:** {contribution}")
         
-    # 6. Contact & WhatsApp (Conditional)
     wa_section = ""
     clean_phone = ''
     if phone_number:
@@ -94,20 +95,16 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
             wa_url = f"https://wa.me/{clean_phone}?text={encoded_msg}"
             wa_section = f"\n[**Click to Chat on WhatsApp**]({wa_url})"
             
-    # Include Contact line only if contact_info exists OR if a WhatsApp link was created
     if contact_info or clean_phone:
         contact_line = f"**Contact:** {contact_info}" if contact_info else "**Contact:**"
         output_lines.append(f"{contact_line}{wa_section}")
 
-    # 7. Description (Always included, even if empty)
     output_lines.append("\n**Description:**")
     output_lines.append(description)
 
-    # 8. Poster URL
     if poster_url and poster_url.lower() != 'none':
         output_lines.append(f"\n\n![Event Poster]({poster_url})")
     
-    # Filter out empty strings and join
     return "\n".join(filter(None, output_lines)).strip()
 
 
@@ -119,21 +116,17 @@ def format_summary_line(doc_metadata: Dict) -> str:
     day = doc_metadata.get('day', '').strip()
     time = doc_metadata.get('time', '').strip()
     loc = doc_metadata.get('location', '').strip()
-    contribution = doc_metadata.get('contribution', '').strip() # NEW
-    phone_number = doc_metadata.get('phone', '').strip() # NEW
+    contribution = doc_metadata.get('contribution', '').strip() 
+    phone_number = doc_metadata.get('phone', '').strip() 
     
     placeholders = {'n/a', 'unknown location', 'upcoming', 'check details'}
 
-    # Create a safe key for the cache lookup
     safe_key = urllib.parse.quote(title)
     
-    # Start with the fetch link
     summary_parts = [f"- [**{title}**](#FETCH::{safe_key})"]
     
-    # Add optional parts only if they exist and are not placeholders
     details = []
     
-    # 1. Day, Time, Location
     if day and day.lower() not in placeholders:
         details.append(day)
     if time and time.lower() not in placeholders:
@@ -141,11 +134,9 @@ def format_summary_line(doc_metadata: Dict) -> str:
     if loc and loc.lower() not in placeholders:
         details.append(f"@{loc}")
     
-    # 2. Contribution (NEW)
     if contribution and contribution.lower() not in placeholders:
         details.append(f"| Contrib: {contribution}")
         
-    # 3. Contact Phone (NEW, only if digits exist)
     clean_phone = ''.join(filter(str.isdigit, str(phone_number)))
     if clean_phone:
         details.append(f"| Ph: {clean_phone}")
@@ -184,24 +175,26 @@ def search_auroville_events(
         
     Searches events, CACHES them in memory, and returns formatted text.
     """
+    global retriever
+    if retriever is None:
+        logger.error("Retriever is not initialized. Cannot perform search.")
+        return "The event database is still initializing. Please wait a moment and try again."
+
     k_value = 100 if specificity.lower() == "broad" else 12
     chroma_filter = {}
     simple_filters = {}
-
-    # Current date is Thursday, November 13, 2025
     
     if filter_date:
         simple_filters["date"] = filter_date
         try:
             for fmt in ["%B %d, %Y", "%B %d"]:
                 try:
-                    # Use a robust way to parse the year for the current context
                     current_year = datetime.now().year
                     parse_str = filter_date if "Y" in fmt else f"{filter_date}, {current_year}"
                     dt = datetime.strptime(parse_str, fmt)
                     simple_filters["day"] = dt.strftime("%A")
                     break
-                except ValueError: continue
+                except ValueError: pass
         except: pass
 
     if filter_day: simple_filters["day"] = filter_day
@@ -225,19 +218,15 @@ def search_auroville_events(
     # --- POPULATE CACHE HERE ---
     global EVENT_DATA_STORE
     
-    # Deduplicate
     seen_keys = set()
     unique_docs = []
     
     for doc in docs:
-        # Create cache key
         title = doc.metadata.get('title', 'Unknown')
         safe_key = urllib.parse.quote(title)
         
-        # Store in Global Cache (Overwrites old versions, which is good)
         EVENT_DATA_STORE[safe_key] = doc
         
-        # Handle internal list deduplication (e.g., same title, same date)
         dedup_key = (title, doc.metadata.get('date'))
         if dedup_key not in seen_keys:
             seen_keys.add(dedup_key)
@@ -259,7 +248,6 @@ def search_auroville_events(
             final_output.append(format_summary_line(doc.metadata))
             
         if specificity.lower() == "broad":
-            # Special link for broad search
             final_output.append("\n\n[**See daily & appointment-based events**](#TRIGGER_SEARCH::daily and appointment-based events::Broad)")
 
     return "\n".join(final_output)
