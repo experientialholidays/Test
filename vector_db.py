@@ -1,7 +1,7 @@
-import os
+Import os
 import shutil
 import pandas as pd
-import ast  # ✅ added to safely parse list-style strings like '["Monday", "Tuesday"]'
+import ast  
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import CharacterTextSplitter
@@ -34,21 +34,27 @@ class VectorDBManager:
                 xls = pd.ExcelFile(file_path)
                 for sheet_name in xls.sheet_names:
                     df = pd.read_excel(xls, sheet_name=sheet_name)
-                    df.columns = df.columns.str.lower()
+                    df.columns = df.columns.str.lower() # Normalize headers to lowercase
 
                     for index, row in df.iterrows():
                         row_text = ", ".join([str(x) for x in row.tolist()])
 
-                        # extract raw metadata
-                        day_raw = str(row.get("day", "N/A"))
-                        date = str(row.get("date", "N/A"))
-                        location = str(row.get("location", "N/A"))
-                        title = str(row.get("title", "N/A"))
-                        time = str(row.get("time", "N/A"))
-                        contribution = str(row.get("contribution", "N/A"))
-                        phone = str(row.get("phone", ""))
+                        # --- MAPPING NEW EXCEL HEADERS TO AGENT METADATA KEYS ---
+                        # REQUIRED FOR FILTERING/SUMMARY
+                        day_raw = str(row.get("days", "N/A"))
+                        date = str(row.get("dates", "N/A"))
+                        location = str(row.get("venue", "N/A"))
+                        
+                        # REQUIRED FOR FULL CARD DISPLAY
+                        title = str(row.get("event name", "N/A"))
+                        time = str(row.get("times", "N/A"))
+                        contribution = str(row.get("cost/contribution", "N/A"))
+                        contact_info = str(row.get("contact person/unit", "")).strip()
+                        phone_number = str(row.get("contact phone/whatsapp", "")).strip() 
+                        poster_url = str(row.get("website/link", None))
+                        # --- END MAPPING ---
 
-                        # ✅ NEW LOGIC: expand multi-day cells like '["Monday", "Tuesday"]'
+                        # NEW LOGIC: expand multi-day cells like '["Monday", "Tuesday"]'
                         if isinstance(day_raw, str) and day_raw.startswith("[") and day_raw.endswith("]"):
                             try:
                                 day_list = ast.literal_eval(day_raw)
@@ -60,21 +66,27 @@ class VectorDBManager:
                             # allow comma-separated or single day
                             day_list = [d.strip() for d in day_raw.split(",") if d.strip()] or ["N/A"]
 
-                        # ✅ create one Document per day
+                        # create one Document per day
                         for single_day in day_list:
+                            final_poster_url = poster_url if poster_url != 'None' else None
+                            
                             documents.append(
                                 Document(
                                     page_content=row_text,
                                     metadata={
                                         "source": source_file,
                                         "sheet": sheet_name,
-                                        "day": single_day,
+                                        "day": single_day.strip(),
                                         "date": date.strip(),
                                         "location": location.strip(),
+                                        # --- AGENT METADATA KEYS ---
                                         "title": title.strip(),
                                         "time": time.strip(),
                                         "contribution": contribution.strip(),
-                                        "phone": phone.strip(), # needed for the WhatsApp link
+                                        "contact": contact_info,
+                                        "poster_url": final_poster_url, 
+                                        "phone": phone_number,
+                                        # --- END AGENT METADATA KEYS ---
                                     },
                                 )
                             )
@@ -85,9 +97,12 @@ class VectorDBManager:
                 for doc in loaded_docs:
                     doc.metadata["source"] = source_file
                     doc.metadata["page"] = doc.metadata.get("page", "N/A")
-                    doc.metadata["day"] = "N/A"
-                    doc.metadata["date"] = "N/A"
-                    doc.metadata["location"] = "N/A"
+                    # Add required defaults for PDF/Text files
+                    doc.metadata.update({
+                        "day": "N/A", "date": "N/A", "location": "N/A",
+                        "title": "N/A", "time": "N/A", "contribution": "N/A",
+                        "contact": "", "poster_url": None, "phone": ""
+                    })
                     documents.append(doc)
 
             elif file_path.endswith(".txt"):
@@ -95,26 +110,30 @@ class VectorDBManager:
                 loaded_docs = loader.load()
                 for doc in loaded_docs:
                     doc.metadata["source"] = source_file
-                    doc.metadata["day"] = "N/A"
-                    doc.metadata["date"] = "N/A"
-                    doc.metadata["location"] = "N/A"
+                    # Add required defaults for PDF/Text files
+                    doc.metadata.update({
+                        "day": "N/A", "date": "N/A", "location": "N/A",
+                        "title": "N/A", "time": "N/A", "contribution": "N/A",
+                        "contact": "", "poster_url": None, "phone": ""
+                    })
                     documents.append(doc)
 
         return documents
 
     def create_or_load_db(self, force_refresh=False):
         if os.path.exists(self.db_name) and not force_refresh:
-            print("Loading existing vector database with metadata support...")
+            print("Loading existing vector database with metadata support (Fast Path)...")
             self.vectorstore = Chroma(
                 persist_directory=self.db_name,
                 embedding_function=self.embeddings,
             )
         else:
             if force_refresh:
-                print("Force refresh enabled - recreating vector database...")
+                print("Force refresh enabled - recreating vector database (Slow Path)...")
                 shutil.rmtree(self.db_name, ignore_errors=True)
+            else:
+                 print("Creating new vector database (Slow Path)...")
 
-            print("Creating new vector database with metadata...")
             documents = self.load_documents()
 
             text_splitter = CharacterTextSplitter(
