@@ -23,6 +23,20 @@ class VectorDBManager:
             openai_api_key=os.getenv("OPENAI_API_KEY"),
         )
         self.vectorstore = None
+        
+        # --- Define the required Excel headers (in lowercase for robustness) ---
+        self.EXCEL_HEADERS = {
+            "event name": "title", 
+            "days": "day", 
+            "dates": "date", 
+            "times": "time", 
+            "venue": "location", 
+            "cost/contribution": "contribution", 
+            "contact person/unit": "contact", 
+            "contact phone/whatsapp": "phone", 
+            "website/link": "poster_url",
+            # 'type of event', 'category', 'description', 'target audience/prerequisites', 'page no.' are used implicitly
+        }
 
     def load_documents(self):
         documents = []
@@ -33,29 +47,44 @@ class VectorDBManager:
             if file_path.endswith(".xlsx") and not file.startswith("~$"):
                 xls = pd.ExcelFile(file_path)
                 for sheet_name in xls.sheet_names:
+                    # Read the sheet and convert headers to lowercase
                     df = pd.read_excel(xls, sheet_name=sheet_name)
-                    df.columns = df.columns.str.lower() # Normalize headers to lowercase
+                    df.columns = df.columns.str.lower()
+                    
+                    # --- CRITICAL FIX: Replace all NaN values with EMPTY STRING ("") ---
+                    df = df.fillna('')
 
+                    # Force critical columns to string type to avoid type errors
+                    for col in self.EXCEL_HEADERS.keys():
+                         if col in df.columns:
+                            df[col] = df[col].astype(str)
+                    
                     for index, row in df.iterrows():
+                        # Create full text content for embedding
+                        # Use the entire row, converted to a string list, to capture all text fields
                         row_text = ", ".join([str(x) for x in row.tolist()])
 
-                        # --- MAPPING NEW EXCEL HEADERS TO AGENT METADATA KEYS ---
-                        # REQUIRED FOR FILTERING/SUMMARY
-                        day_raw = str(row.get("days", "N/A"))
-                        date = str(row.get("dates", "N/A"))
-                        location = str(row.get("venue", "N/A"))
+                        # --- MAPPING: Ensure blank cells result in "" ---
+                        # Use self.EXCEL_HEADERS to map the Excel column (key) to the Agent metadata (value)
                         
-                        # REQUIRED FOR FULL CARD DISPLAY
-                        title = str(row.get("event name", "N/A"))
-                        time = str(row.get("times", "N/A"))
-                        contribution = str(row.get("cost/contribution", "N/A"))
-                        contact_info = str(row.get("contact person/unit", "")).strip()
-                        phone_number = str(row.get("contact phone/whatsapp", "")).strip() 
-                        poster_url = str(row.get("website/link", None))
-                        # --- END MAPPING ---
-
-                        # NEW LOGIC: expand multi-day cells like '["Monday", "Tuesday"]'
-                        if isinstance(day_raw, str) and day_raw.startswith("[") and day_raw.endswith("]"):
+                        # Extract and strip critical fields, defaulting to ""
+                        day_raw = row.get("days", "").strip()
+                        date = row.get("dates", "").strip()
+                        location = row.get("venue", "").strip()
+                        
+                        title = row.get("event name", "").strip()
+                        time = row.get("times", "").strip()
+                        contribution = row.get("cost/contribution", "").strip()
+                        
+                        contact_info = row.get("contact person/unit", "").strip()
+                        phone_number = row.get("contact phone/whatsapp", "").strip() 
+                        
+                        # Handle poster_url separately as None is better than "" if it's blank
+                        poster_url_raw = row.get("website/link", "").strip()
+                        poster_url = poster_url_raw if poster_url_raw else None
+                        
+                        # Logic to expand multi-day cells
+                        if day_raw.startswith("[") and day_raw.endswith("]"):
                             try:
                                 day_list = ast.literal_eval(day_raw)
                                 if not isinstance(day_list, list):
@@ -63,28 +92,33 @@ class VectorDBManager:
                             except Exception:
                                 day_list = [day_raw]
                         else:
-                            # allow comma-separated or single day
-                            day_list = [d.strip() for d in day_raw.split(",") if d.strip()] or ["N/A"]
+                            # Split by comma for multiple days, filter out empty strings
+                            day_list = [d.strip() for d in day_raw.split(",") if d.strip()] or [""]
 
-                        # create one Document per day
+                        # Create one Document per day
                         for single_day in day_list:
-                            final_poster_url = poster_url if poster_url != 'None' else None
                             
+                            # Final metadata cleanup: ensure empty strings are used for missing values
+                            final_day = single_day if single_day else ""
+                            final_date = date if date else ""
+                            final_location = location if location else ""
+                            final_title = title if title else "Event" # Default title to something for FETCH link
+
                             documents.append(
                                 Document(
                                     page_content=row_text,
                                     metadata={
                                         "source": source_file,
                                         "sheet": sheet_name,
-                                        "day": single_day.strip(),
-                                        "date": date.strip(),
-                                        "location": location.strip(),
                                         # --- AGENT METADATA KEYS ---
-                                        "title": title.strip(),
-                                        "time": time.strip(),
-                                        "contribution": contribution.strip(),
+                                        "day": final_day,
+                                        "date": final_date,
+                                        "location": final_location,
+                                        "title": final_title,
+                                        "time": time if time else "",
+                                        "contribution": contribution if contribution else "",
                                         "contact": contact_info,
-                                        "poster_url": final_poster_url, 
+                                        "poster_url": poster_url, 
                                         "phone": phone_number,
                                         # --- END AGENT METADATA KEYS ---
                                     },
@@ -96,11 +130,10 @@ class VectorDBManager:
                 loaded_docs = loader.load()
                 for doc in loaded_docs:
                     doc.metadata["source"] = source_file
-                    doc.metadata["page"] = doc.metadata.get("page", "N/A")
-                    # Add required defaults for PDF/Text files
+                    doc.metadata["page"] = doc.metadata.get("page", "")
                     doc.metadata.update({
-                        "day": "N/A", "date": "N/A", "location": "N/A",
-                        "title": "N/A", "time": "N/A", "contribution": "N/A",
+                        "day": "", "date": "", "location": "",
+                        "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": ""
                     })
                     documents.append(doc)
@@ -110,10 +143,9 @@ class VectorDBManager:
                 loaded_docs = loader.load()
                 for doc in loaded_docs:
                     doc.metadata["source"] = source_file
-                    # Add required defaults for PDF/Text files
                     doc.metadata.update({
-                        "day": "N/A", "date": "N/A", "location": "N/A",
-                        "title": "N/A", "time": "N/A", "contribution": "N/A",
+                        "day": "", "date": "", "location": "",
+                        "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": ""
                     })
                     documents.append(doc)
