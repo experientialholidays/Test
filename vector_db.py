@@ -82,8 +82,7 @@ class VectorDBManager:
             "Cost/Contribution": "contribution", 
             "Contact Person/Unit": "contact", 
             "Contact Phone/Whatsapp": "phone", 
-            "w
-            Website/Link": "poster_url",
+            "Website/Link": "poster_url",
         }
 
     def load_documents(self):
