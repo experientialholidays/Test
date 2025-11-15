@@ -74,15 +74,16 @@ class VectorDBManager:
         
         # --- Define the required Excel headers (in lowercase for robust lookup) ---
         self.EXCEL_HEADERS = {
-            "event name": "title", 
-            "days": "day", 
-            "dates": "date", 
-            "times": "time", 
-            "venue": "location", 
-            "cost/contribution": "contribution", 
-            "contact person/unit": "contact", 
-            "contact phone/whatsapp": "phone", 
-            "website/link": "poster_url",
+            "Event Name": "title", 
+            "Days": "day", 
+            "Dates": "date", 
+            "Times": "time", 
+            "Venue": "location", 
+            "Cost/Contribution": "contribution", 
+            "Contact Person/Unit": "contact", 
+            "Contact Phone/Whatsapp": "phone", 
+            "w
+            Website/Link": "poster_url",
         }
 
     def load_documents(self):
