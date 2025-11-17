@@ -1,191 +1,148 @@
+import os
+import logging
 import gradio as gr
 import asyncio
-import os
-from dotenv import load_dotenv
-from agents import Runner, trace, gen_trace_id
-from vector_db import VectorDBManager
-from db import SessionDBManager
-from session_handler import SessionHandler
-from auroville_agent import auroville_agent, db_manager, initialize_retriever # <-- IMPORT db_manager and initialize_retriever
-import logging
+# Import the agent and data store from your auroville_agent module
+# Assuming your full agent code is saved as auroville_agent.py
+from auroville_agent import auroville_agent, EVENT_DATA_STORE, format_event_card
 
+# --- 1. Setup & Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv(override=True)
-openai_api_key = os.getenv("OPENAI_API_KEY")
+# --- 2. Gradio Interface Function ---
 
-SESSION_DB_FILE = "sessions.db"
-session_db_manager = SessionDBManager(db_file=SESSION_DB_FILE)
-session_handler = SessionHandler(session_db_manager=session_db_manager)
-
-# --- VECTOR DB INITIALIZATION ---
-VECTOR_DB_NAME = "vector_db"
-DB_FOLDER = "input"
-# db_manager is imported from auroville_agent.py
-
-try:
-    print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=TRUE) ---")
-    # 1. Call the initialization method, which returns the vectorstore
-    # >>> TEMPORARILY SET TO TRUE FOR THE FIRST DEPLOYMENT <<<
-    vectorstore = db_manager.create_or_load_db(force_refresh=True) 
-    
-    # 2. **CRITICAL NEW STEP:** Initialize the retriever in the agent module
-    initialize_retriever(vectorstore) 
-    
-    print("--- VECTOR DB INITIALIZATION COMPLETE ---")
-except Exception as e:
-    logger.error(f"FATAL ERROR during DB initialization: {e}")
-    # If this fails, the app will still launch but the agent will return an error message.
-    pass
-
-# --- END VECTOR DB INITIALIZATION ---
-
-
-# -----------------------------
-# ASYNC STREAMING CHAT FUNCTION
-# -----------------------------
-async def streaming_chat(question, history, session_id):
+async def agent_query_handler(user_input: str) -> str:
     """
-    Handle streaming chat using OpenAI Agents SDK with real streaming.
+    Handles user input, calls the async agent, and manages dynamic clicks.
     """
-    logger.info(f'Processing chat for session: {session_id}')
-    
-    if not session_id or session_id == "null":
-        logger.info("ERROR: No valid session_id!")
-        return
-    
-    session_handler.save_message(session_id, "user", question)
-    messages = history.copy() 
-    messages.append({"role": "user", "content": question})
-    
+    if not user_input.strip():
+        return "Please enter a question to search for events."
+
+    # --- Handle #FETCH:: Click Logic ---
+    if user_input.startswith("#FETCH::"):
+        try:
+            # Extract the safe_key from the command, e.g., #FETCH::Event%20Name
+            safe_key = user_input.split("::")[1]
+            doc = EVENT_DATA_STORE.get(safe_key)
+            
+            if doc:
+                # Use your existing formatting helper to return the full card
+                return format_event_card(doc.metadata, doc.page_content)
+            else:
+                return "Error: Event details not found in the cache. Please run the search again."
+        except Exception as e:
+            return f"Error processing fetch request: {e}"
+
+    # --- Handle New Search Query ---
     try:
-        response_text = ""
-        clean_message = [{"role": m["role"], "content": m["content"]} for m in messages if "role" in m and "content" in m]
+        # NOTE: The agent.arun is an async function, so we must await it.
+        response_text = await auroville_agent.arun(
+            user_input=user_input,
+            session_id="gradio_session"
+        )
+        return response_text
 
-        trace_id = gen_trace_id()
-        with trace("Auroville chatbot", trace_id=trace_id):
-            logger.info(f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}")
-            
-            result = Runner.run_streamed(auroville_agent, clean_message)
-            
-            async for event in result.stream_events():
-                event_type_name = type(event).__name__
-                if event_type_name == "RawResponsesStreamEvent":
-                    data = event.data
-                    if data.__class__.__name__ == "ResponseTextDeltaEvent":
-                        response_text += data.delta
-                        updated_history = history.copy()
-                        updated_history.append({"role": "user", "content": question})
-                        updated_history.append({"role": "assistant", "content": response_text})
-                        yield updated_history
-            
-        if response_text:
-            session_handler.save_message(session_id, "assistant", response_text)
-        else:
-            error_msg = "I apologize, but I couldn't generate a proper response. Please try again."
-            updated_history = history.copy()
-            updated_history.append({"role": "user", "content": question})
-            updated_history.append({"role": "assistant", "content": error_msg})
-            yield updated_history
-            session_handler.save_message(session_id, "assistant", error_msg)
+    except RuntimeError as e:
+        # This catches the RuntimeError raised by get_initialized_retriever()
+        if "Retriever initialization failed" in str(e):
+             return "🚨 System Error: The event database failed to load during the request. This may be due to a Cloud Run startup timeout. Please try again in 30 seconds."
+        return f"An unexpected error occurred during agent execution: {e}"
         
     except Exception as e:
-        error_msg = f"I encountered an error: {str(e)}. Please try again."
-        logger.error(f"Error: {e}")
-        updated_history = history.copy()
-        updated_history.append({"role": "user", "content": question})
-        updated_history.append({"role": "assistant", "content": error_msg})
-        yield updated_history
-        session_handler.save_message(session_id, "assistant", error_msg)
+        return f"An unexpected error occurred: {e}"
 
-# -----------------------------
-# GRADIO APP
-# -----------------------------
+# --- 3. Gradio Blocks Setup ---
 
-JS_CODE = """
-function attachClickHandlers(msg_input_id, submit_btn_id) {
-    const chatbotContainer = document.querySelector('div[data-testid="chatbot"]');
-    if (!chatbotContainer) return;
+with gr.Blocks(title="Auroville Events Assistant") as demo:
+    gr.Markdown("# 📅 Auroville Events Assistant")
+    gr.Markdown(
+        "Ask a question about events, workshops, or activities (e.g., 'What events are happening tomorrow in Youth Centre?').\n\n"
+        "**NOTE:** If the first search is slow, it is loading the database. Subsequent searches will be faster."
+    )
 
-    chatbotContainer.addEventListener('click', function(event) {
-        let target = event.target;
-        
-        if (target.tagName !== 'A') {
-            target = target.closest('a');
-            if (!target) return;
-        }
+    # Use a ChatInterface-style structure for better input/output
+    query_box = gr.Textbox(
+        label="Your Query", 
+        placeholder="e.g., What is happening this weekend?", 
+        lines=2
+    )
+    
+    output_box = gr.Markdown(
+        label="Event Search Results", 
+        value="Results will appear here. Click on an event name for full details."
+    )
 
-        const href = target.getAttribute('href');
-        if (!href) return;
-        
-        if (href.startsWith('#TRIGGER_SEARCH::')) {
-            event.preventDefault();
+    submit_btn = gr.Button("Search Events", variant="primary")
 
-            const parts = href.substring(1).split('::');
-            if (parts.length < 2) return;
-            const query = parts[1]; 
+    # Gradio's click handler for the button
+    # NOTE: The function is async, so we use gr.Interface(..., fn=async_func)
+    submit_btn.click(
+        fn=agent_query_handler,
+        inputs=[query_box],
+        outputs=[output_box],
+    )
+    
+    # --- Interactivity Hook for Fetching Details ---
+    # This feature requires a hidden element to capture the click action
+    # and a separate component to trigger the function.
+    
+    # 1. Hidden input that receives the custom markdown link content (e.g., #FETCH::Event%20Name)
+    fetch_trigger = gr.Textbox(visible=False, label="Fetch Trigger")
+
+    # 2. JS function to detect the custom link click and send the command to the fetch_trigger textbox
+    # This JS runs when a link is clicked inside the output_box
+    output_box.change(
+        None,
+        None,
+        None,
+        _js=f"""
+        (output_box) => {{
+            let content = document.querySelector('p:last-child').innerHTML;
+            let match = content.match(/href="#(FETCH::[^"]+)"/);
             
-            const msgInput = document.getElementById(msg_input_id);
-            const submitBtn = document.getElementById(submit_btn_id);
+            if (match) {{
+                // This is needed for dynamic content like the FETCH:: links
+                document.querySelectorAll('a[href^="#FETCH::"]').forEach(link => {{
+                    link.onclick = function(e) {{
+                        e.preventDefault();
+                        const fetchCommand = this.getAttribute('href').substring(1);
+                        // Write the command to the hidden input
+                        document.querySelector('input[aria-label="Fetch Trigger"]').value = fetchCommand;
+                        // Click the hidden button to trigger the fetch_details logic
+                        document.querySelector('#fetch_hidden_btn').click();
+                    }};
+                }});
+            }}
+            return output_box;
+        }}
+        """
+    )
+    
+    # 3. Hidden button that listens for the JS trigger to execute the fetch logic
+    fetch_hidden_btn = gr.Button("Fetch Details", elem_id="fetch_hidden_btn", visible=False)
 
-            if (msgInput && submitBtn) {
-                msgInput.value = query;
-                submitBtn.click();
-            }
-        }
-    });
-}
-"""
+    # 4. Hidden button's click handler runs the agent_query_handler with the FETCH command
+    fetch_hidden_btn.click(
+        fn=agent_query_handler,
+        inputs=[fetch_trigger],
+        outputs=[output_box],
+        # The hidden textbox will contain the #FETCH:: command
+        queue=False 
+    )
+
+
+# --- 4. Launch Settings for Cloud Run ---
 
 if __name__ == "__main__":
-    with gr.Blocks(js=JS_CODE) as demo:
-        gr.Markdown("# 🤖 Auroville Events Chatbot")
-        
-        session_id_state = gr.State(value="")
-        session_id_bridge = gr.Textbox(value="", visible=False)
-        temp_storage_state = gr.State(value="")  
-        
-        chatbot = gr.Chatbot(height=500, value=[],type='messages')
-        
-        msg = gr.Textbox(
-            placeholder="Ask me anything about Auroville events...",
-            lines=1,
-            label="Message",
-            show_label=False,
-            elem_id="msg_input_field"
-        )
-        
-        with gr.Row():
-            submit = gr.Button("Send", variant="primary", elem_id="submit_button")
-            clear = gr.Button("Clear Chat")
-            new_session_btn = gr.Button("New Session")
-        
-        demo.load(
-            None,
-            None,
-            None,
-            js=f"() => {{ attachClickHandlers('msg_input_field', 'submit_button'); }}"
-        )
-        
-        session_handler.setup_session_handlers(
-            demo=demo,
-            session_id_state=session_id_state,
-            session_id_bridge=session_id_bridge,
-            temp_storage_state=temp_storage_state,
-            chatbot=chatbot,
-            new_session_btn=new_session_btn
-        )        
-        
-        msg.submit(streaming_chat,inputs=[msg, chatbot, session_id_state],outputs=[chatbot]).then(lambda: "",None,msg )
-        submit.click(streaming_chat,inputs=[msg, chatbot, session_id_state],outputs=[chatbot]).then(lambda: "",None,msg)       
-        
-        clear.click(lambda: [], None, chatbot)
+    # Cloud Run uses the PORT environment variable
+    port = int(os.environ.get("PORT", 7860))
+    
+    # Set the server name to '0.0.0.0' to listen on all interfaces (required for Docker/Cloud Run)
+    demo.queue().launch(
+        server_name="0.0.0.0",
+        server_port=port,
+        # Setting a concurrency limit can sometimes help manage resources on Cloud Run
+        max_threads=20 
+    )
 
-    logger.info("App started with OpenAI Agents SDK - Real Streaming Enabled")
-    
-    server_port = int(os.environ.get("PORT", 8080))
-    server_host = "0.0.0.0"
-    
-    demo.launch(server_name=server_host, server_port=server_port, inbrowser=False, debug=False)
