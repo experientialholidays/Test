@@ -1,9 +1,8 @@
 import os
 import logging
-import gradio as gr
 import asyncio
+import gradio as gr
 # Import the agent and data store from your auroville_agent module
-# Assuming your full agent code is saved as auroville_agent.py
 from auroville_agent import auroville_agent, EVENT_DATA_STORE, format_event_card
 
 # --- 1. Setup & Logging ---
@@ -36,7 +35,7 @@ async def agent_query_handler(user_input: str) -> str:
 
     # --- Handle New Search Query ---
     try:
-        # NOTE: The agent.arun is an async function, so we must await it.
+        # The agent.arun is an async function
         response_text = await auroville_agent.arun(
             user_input=user_input,
             session_id="gradio_session"
@@ -61,74 +60,83 @@ with gr.Blocks(title="Auroville Events Assistant") as demo:
         "**NOTE:** If the first search is slow, it is loading the database. Subsequent searches will be faster."
     )
 
-    # Use a ChatInterface-style structure for better input/output
     query_box = gr.Textbox(
         label="Your Query", 
         placeholder="e.g., What is happening this weekend?", 
         lines=2
     )
     
+    # Assign an ID to the output box for the JavaScript observer to target reliably
     output_box = gr.Markdown(
         label="Event Search Results", 
-        value="Results will appear here. Click on an event name for full details."
+        value="Results will appear here. Click on an event name for full details.",
+        elem_id="output_box_id" # <--- Added ID
     )
 
     submit_btn = gr.Button("Search Events", variant="primary")
 
-    # Gradio's click handler for the button
-    # NOTE: The function is async, so we use gr.Interface(..., fn=async_func)
     submit_btn.click(
         fn=agent_query_handler,
         inputs=[query_box],
         outputs=[output_box],
+        queue=True
     )
     
-    # --- Interactivity Hook for Fetching Details ---
-    # This feature requires a hidden element to capture the click action
-    # and a separate component to trigger the function.
+    # --- Interactivity Hook for Fetching Details (FIXED BLOCK) ---
     
     # 1. Hidden input that receives the custom markdown link content (e.g., #FETCH::Event%20Name)
-    fetch_trigger = gr.Textbox(visible=False, label="Fetch Trigger")
+    fetch_trigger = gr.Textbox(visible=False, label="Fetch Trigger", elem_id="fetch_trigger_id")
 
-    # 2. JS function to detect the custom link click and send the command to the fetch_trigger textbox
-    # This JS runs when a link is clicked inside the output_box
-    output_box.change(
-        None,
-        None,
-        None,
-        _js=f"""
-        (output_box) => {{
-            let content = document.querySelector('p:last-child').innerHTML;
-            let match = content.match(/href="#(FETCH::[^"]+)"/);
-            
-            if (match) {{
-                // This is needed for dynamic content like the FETCH:: links
-                document.querySelectorAll('a[href^="#FETCH::"]').forEach(link => {{
-                    link.onclick = function(e) {{
-                        e.preventDefault();
-                        const fetchCommand = this.getAttribute('href').substring(1);
-                        // Write the command to the hidden input
-                        document.querySelector('input[aria-label="Fetch Trigger"]').value = fetchCommand;
-                        // Click the hidden button to trigger the fetch_details logic
-                        document.querySelector('#fetch_hidden_btn').click();
-                    }};
-                }});
-            }}
-            return output_box;
-        }}
-        """
-    )
-    
-    # 3. Hidden button that listens for the JS trigger to execute the fetch logic
+    # 2. Hidden button that listens for the JS trigger to execute the fetch logic
     fetch_hidden_btn = gr.Button("Fetch Details", elem_id="fetch_hidden_btn", visible=False)
 
-    # 4. Hidden button's click handler runs the agent_query_handler with the FETCH command
+    # 3. Hidden button's click handler runs the agent_query_handler with the FETCH command
     fetch_hidden_btn.click(
         fn=agent_query_handler,
         inputs=[fetch_trigger],
         outputs=[output_box],
-        # The hidden textbox will contain the #FETCH:: command
         queue=False 
+    )
+    
+    # 4. Global JS Hook using demo.load() (Replaces the error-prone output_box.change)
+    # This executes JavaScript logic on the browser side when the demo is loaded.
+    demo.load(
+        None,
+        None,
+        None,
+        # This is the JavaScript that sets up the dynamic click listener
+        # It detects when content changes and re-attaches the click handlers to the #FETCH:: links
+        _js=f"""
+        function attachFetchListeners() {{
+            const outputElement = document.getElementById('output_box_id');
+            if (outputElement) {{
+                outputElement.querySelectorAll('a[href^="#FETCH::"]').forEach(link => {{
+                    // Prevent multiple listeners if the function is called multiple times
+                    if (!link.hasAttribute('data-fetch-listener')) {{
+                        link.setAttribute('data-fetch-listener', 'true');
+                        link.onclick = function(e) {{
+                            e.preventDefault();
+                            const fetchCommand = this.getAttribute('href').substring(1);
+                            // Write the command to the hidden input (fetch_trigger)
+                            document.getElementById('fetch_trigger_id').querySelector('textarea').value = fetchCommand;
+                            // Click the hidden button to trigger the fetch_details logic
+                            document.getElementById('fetch_hidden_btn').click();
+                        }};
+                    }}
+                }});
+            }}
+        }}
+
+        // Use a MutationObserver to re-attach the listeners whenever the output content changes
+        const observerTarget = document.getElementById('output_box_id');
+        if (observerTarget) {{
+            const observer = new MutationObserver(attachFetchListeners);
+            observer.observe(observerTarget, {{ childList: true, subtree: true }});
+        }}
+        
+        // Also run on initial load
+        attachFetchListeners();
+        """
     )
 
 
@@ -145,4 +153,3 @@ if __name__ == "__main__":
         # Setting a concurrency limit can sometimes help manage resources on Cloud Run
         max_threads=20 
     )
-
