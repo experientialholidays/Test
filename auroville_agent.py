@@ -6,13 +6,13 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from agents import Agent, function_tool, OpenAIChatCompletionsModel
-from vector_db import VectorDBManager, get_event_level, parse_time_for_sort, is_date_specific # NEW IMPORTS
+from vector_db import VectorDBManager, get_event_level, parse_time_for_sort, is_date_specific
 from vectordb_query_selector_agent import vectordb_query_selector_agent 
 from openai import AsyncOpenAI
 from langchain_core.documents import Document 
 
 # -------------------------------------------------------------------------
-# 1. Setup & Global Cache (Lazy Initialization Fix Applied Here)
+# 1. Setup & Global Cache (Guarded Lazy Initialization Implemented)
 # -------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,23 +27,44 @@ google_api_key = os.getenv('GOOGLE_API_KEY')
 
 db_manager = VectorDBManager(folder=DB_FOLDER, db_name=VECTOR_DB_NAME)
 
-# --- CRITICAL FIX: LAZY INITIALIZATION ---
+# --- CRITICAL: GLOBAL RETRIEVER (Starts as None) ---
 retriever = None 
 
-def initialize_retriever(vectorstore):
-    """Initializes the global retriever instance after vectorstore creation."""
+def get_initialized_retriever():
+    """
+    Guards access to the retriever. If it is not initialized (first run), 
+    it performs the initialization and stores the result globally. This runs 
+    inside the request, leveraging the CPU boost.
+    """
     global retriever
-    if vectorstore:
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 50})
-        logger.info("Auroville agent retriever successfully initialized.")
-    else:
-        logger.error("Failed to initialize retriever: Vectorstore is None.")
+    if retriever is None:
+        logger.info("Retriever is UNINITIALIZED. Attempting initialization now...")
+        try:
+            # 1. Load the vectorstore instance (The heavy lifting)
+            vectorstore_instance = db_manager.load_or_create_db()
+            
+            # 2. Initialize the global retriever with the instance
+            if vectorstore_instance:
+                retriever = vectorstore_instance.as_retriever(search_kwargs={"k": 50})
+                logger.info("Auroville agent retriever successfully initialized.")
+            else:
+                 logger.error("Vectorstore is None after loading.")
+                 raise ValueError("Vectorstore not created.")
+                 
+        except Exception as e:
+            logger.error(f"RUNTIME ERROR: Failed to initialize Retriever. Details: {e}")
+            # Ensure retriever remains None on failure
+            retriever = None
+            # Re-raise the exception to be caught by the calling tool
+            raise RuntimeError("Retriever initialization failed.") from e
+            
+    return retriever
 
 gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
 
 # -------------------------------------------------------------------------
-# 2. Formatting Helpers 
+# 2. Formatting Helpers (Unchanged)
 # -------------------------------------------------------------------------
 
 def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
@@ -110,11 +131,11 @@ def format_summary_line(doc_metadata: Dict) -> str:
     Formats the summary line with a SPECIAL fetch link, including key info.
     """
     title = doc_metadata.get('title', 'Event').strip()
-    day = doc_metadata.get('day', '').strip()
-    time_str = doc_metadata.get('time', '').strip()
-    loc = doc_metadata.get('location', '').strip()
-    contribution = doc_metadata.get('contribution', '').strip() 
-    phone_number = doc_metadata.get('phone', '').strip() 
+    day = doc.metadata.get('day', '').strip()
+    time_str = doc.metadata.get('time', '').strip()
+    loc = doc.metadata.get('location', '').strip()
+    contribution = doc.metadata.get('contribution', '').strip() 
+    phone_number = doc.metadata.get('phone', '').strip() 
     
     safe_key = urllib.parse.quote(title)
     
@@ -143,7 +164,7 @@ def format_summary_line(doc_metadata: Dict) -> str:
     return " ".join(summary_parts)
 
 # -------------------------------------------------------------------------
-# 3. Optimized Tool (Full Body with Sorting and Filtering)
+# 3. Optimized Tool (Now calls the guarded function)
 # -------------------------------------------------------------------------
 @function_tool
 def search_auroville_events(
@@ -155,12 +176,15 @@ def search_auroville_events(
 ) -> str:
     """
     Search for information about events and activities. 
-    ... (Docstring truncated for brevity) ...
+    It automatically filters out past events and sorts the remaining ones.
+    The tool takes an optimized search query, specificity (Broad/Specific), and optional filters.
     """
-    global retriever
-    if retriever is None:
-        logger.error("Retriever is not initialized. Cannot perform search.")
-        return "The event database is still initializing. Please wait a moment and try again."
+    try:
+        # Use the guarded function to ensure initialization happens
+        retriever_instance = get_initialized_retriever()
+    except RuntimeError:
+        # Catch the exception raised by get_initialized_retriever()
+        return "System Error: The event database failed to load during the request. Please try again or alert the administrator."
 
     k_value = 100 if specificity.lower() == "broad" else 12
     chroma_filter = {}
@@ -200,7 +224,8 @@ def search_auroville_events(
     if chroma_filter: search_kwargs["filter"] = chroma_filter
 
     # EXECUTE SEARCH
-    docs = retriever.invoke(search_query, **search_kwargs)
+    # Now using the initialized retriever_instance
+    docs = retriever_instance.invoke(search_query, **search_kwargs)
 
     if not docs:
         return "I couldn't find any upcoming events matching those criteria."
