@@ -70,7 +70,7 @@ with gr.Blocks(title="Auroville Events Assistant") as demo:
     output_box = gr.Markdown(
         label="Event Search Results", 
         value="Results will appear here. Click on an event name for full details.",
-        elem_id="output_box_id" # <--- Added ID
+        elem_id="output_box_id"
     )
 
     submit_btn = gr.Button("Search Events", variant="primary")
@@ -82,9 +82,9 @@ with gr.Blocks(title="Auroville Events Assistant") as demo:
         queue=True
     )
     
-    # --- Interactivity Hook for Fetching Details (FIXED BLOCK) ---
+    # --- Interactivity Hook for Fetching Details ---
     
-    # 1. Hidden input that receives the custom markdown link content (e.g., #FETCH::Event%20Name)
+    # 1. Hidden input that receives the custom markdown link content
     fetch_trigger = gr.Textbox(visible=False, label="Fetch Trigger", elem_id="fetch_trigger_id")
 
     # 2. Hidden button that listens for the JS trigger to execute the fetch logic
@@ -98,46 +98,50 @@ with gr.Blocks(title="Auroville Events Assistant") as demo:
         queue=False 
     )
     
-    # 4. Global JS Hook using demo.load() (Replaces the error-prone output_box.change)
-    # This executes JavaScript logic on the browser side when the demo is loaded.
-    demo.load(
-        None,
-        None,
-        None,
-        # This is the JavaScript that sets up the dynamic click listener
-        # It detects when content changes and re-attaches the click handlers to the #FETCH:: links
-        _js=f"""
-        function attachFetchListeners() {{
+    # 4. Global JS Injection using gr.HTML (Workaround for _js TypeError)
+    # This code block injects the JavaScript observer globally using the HTML component.
+    js_code = """
+    <script>
+        function attachFetchListeners() {
             const outputElement = document.getElementById('output_box_id');
-            if (outputElement) {{
-                outputElement.querySelectorAll('a[href^="#FETCH::"]').forEach(link => {{
+            if (outputElement) {
+                // Find all links that start with #FETCH::
+                outputElement.querySelectorAll('a[href^="#FETCH::"]').forEach(link => {
                     // Prevent multiple listeners if the function is called multiple times
-                    if (!link.hasAttribute('data-fetch-listener')) {{
+                    if (!link.hasAttribute('data-fetch-listener')) {
                         link.setAttribute('data-fetch-listener', 'true');
-                        link.onclick = function(e) {{
+                        link.onclick = function(e) {
                             e.preventDefault();
                             const fetchCommand = this.getAttribute('href').substring(1);
-                            // Write the command to the hidden input (fetch_trigger)
-                            document.getElementById('fetch_trigger_id').querySelector('textarea').value = fetchCommand;
-                            // Click the hidden button to trigger the fetch_details logic
-                            document.getElementById('fetch_hidden_btn').click();
-                        }};
-                    }}
-                }});
-            }}
-        }}
+                            
+                            // Target the textarea inside the hidden fetch_trigger box
+                            const triggerElement = document.getElementById('fetch_trigger_id').querySelector('textarea');
+                            if (triggerElement) {
+                                triggerElement.value = fetchCommand;
+                                
+                                // Click the hidden button to trigger the fetch_details logic
+                                document.getElementById('fetch_hidden_btn').click();
+                            }
+                        };
+                    }
+                });
+            }
+        }
 
         // Use a MutationObserver to re-attach the listeners whenever the output content changes
         const observerTarget = document.getElementById('output_box_id');
-        if (observerTarget) {{
+        if (observerTarget) {
             const observer = new MutationObserver(attachFetchListeners);
-            observer.observe(observerTarget, {{ childList: true, subtree: true }});
-        }}
+            // Observe changes to the content and subtree
+            observer.observe(observerTarget, { childList: true, subtree: true });
+        }
         
         // Also run on initial load
         attachFetchListeners();
-        """
-    )
+    </script>
+    """
+    # Insert the JS code as raw HTML at the end of the demo
+    gr.HTML(js_code)
 
 
 # --- 4. Launch Settings for Cloud Run ---
