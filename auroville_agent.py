@@ -1,15 +1,43 @@
+
 import os
 import logging
 import urllib.parse
 import ast
-from datetime import datetime
+from datetime import datetime, time # ADDED 'time' import
 from typing import Optional, Dict, Any, List
 
 from agents import Agent, function_tool, OpenAIChatCompletionsModel
-from vector_db import VectorDBManager, get_event_level, parse_time_for_sort, is_date_specific # NEW IMPORTS
+from vector_db import VectorDBManager # ONLY VectorDBManager imported
 from vectordb_query_selector_agent import vectordb_query_selector_agent 
 from openai import AsyncOpenAI
 from langchain_core.documents import Document 
+
+# -------------------------------------------------------------------------
+# Date/Time Helper Functions (RE-ADDED)
+# -------------------------------------------------------------------------
+
+def is_date_specific(date_str, day_str):
+    """Classifies an event as date-specific."""
+    # A specific date is anything that is not blank or a common placeholder
+    return bool(date_str and date_str.lower() not in ('', 'n/a', 'upcoming', 'none'))
+
+def parse_time_for_sort(time_str: str) -> time:
+    """Parses a time string into a sortable time object. Defaults to 23:59:59 if unparseable."""
+    if not time_str or time_str.lower() in ('', 'n/a', 'none', 'check details'):
+        return time(23, 59, 59) # Sorts to the end
+
+    time_str = time_str.replace('.', ':').strip().upper()
+    
+    # Try common time formats
+    for fmt in ('%I:%M %p', '%H:%M', '%I:%M'):
+        try:
+            # We use a dummy date for parsing, only the time is relevant
+            dt = datetime.strptime(time_str, fmt)
+            return dt.time()
+        except ValueError:
+            continue
+            
+    return time(23, 59, 59) # Default to end if unparseable
 
 # -------------------------------------------------------------------------
 # 1. Setup & Global Cache (Lazy Initialization Fix Applied Here)
@@ -60,10 +88,14 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     description = doc_content.strip()
     poster_url = doc_metadata.get('poster_url', None)
     phone_number = doc_metadata.get('phone', '').strip()
+    category = doc_metadata.get('category', '').strip() 
 
     output_lines = []
     
     output_lines.append(f"**Event Name:** {title}")
+    
+    if category: 
+        output_lines.append(f"**Category:** {category}")
 
     when_parts = []
     if day_str:
@@ -115,12 +147,17 @@ def format_summary_line(doc_metadata: Dict) -> str:
     loc = doc_metadata.get('location', '').strip()
     contribution = doc_metadata.get('contribution', '').strip() 
     phone_number = doc_metadata.get('phone', '').strip() 
+    category = doc_metadata.get('category', '').strip() 
     
     safe_key = urllib.parse.quote(title)
     
     summary_parts = [f"- [**{title}**](#FETCH::{safe_key})"]
     
     details = []
+    
+    # Add category to summary if it exists
+    if category:
+        details.append(f"({category})")
     
     if day:
         details.append(day)
@@ -143,7 +180,7 @@ def format_summary_line(doc_metadata: Dict) -> str:
     return " ".join(summary_parts)
 
 # -------------------------------------------------------------------------
-# 3. Optimized Tool (Full Body with Sorting and Filtering)
+# 3. Optimized Tool (Full Body with Sorting and Filtering RE-IMPLEMENTED)
 # -------------------------------------------------------------------------
 @function_tool
 def search_auroville_events(
@@ -205,7 +242,7 @@ def search_auroville_events(
     if not docs:
         return "I couldn't find any upcoming events matching those criteria."
 
-    # --- FILTERING (EXCLUDE ENDED EVENTS) ---
+    # --- FILTERING (RE-IMPLEMENTED: EXCLUDE ENDED EVENTS) ---
     current_datetime = datetime.now()
     current_date = current_datetime.date()
     current_time = current_datetime.time()
@@ -215,7 +252,7 @@ def search_auroville_events(
     for doc in docs:
         date_str = doc.metadata.get('date', '').strip()
         time_str = doc.metadata.get('time', '').strip()
-        is_specific = is_date_specific(date_str, doc.metadata.get('day', ''))
+        is_specific = is_date_specific(date_str, doc.metadata.get('day', '')) # Uses re-added helper
         
         if is_specific:
             try:
@@ -230,14 +267,14 @@ def search_auroville_events(
                              parse_str = f"{date_str}, {current_date.year}"
                              
                         event_date = datetime.strptime(parse_str.strip(), fmt.strip()).date()
-                        event_time = parse_time_for_sort(time_str)
+                        event_time = parse_time_for_sort(time_str) # Uses re-added helper
                         event_datetime = datetime.combine(event_date, event_time)
                         break
                     except ValueError:
                         continue
                         
                 if event_datetime:
-                     # Filter: If the event date is in the past, or if it's today and the time is past 23:59 (the default sort time)
+                     # Filter: If the event date is in the past, or if it's today and the time is past the event time
                     if event_datetime.date() < current_date:
                         continue 
                     if event_datetime.date() == current_date and event_datetime.time() < current_time:
@@ -259,30 +296,31 @@ def search_auroville_events(
     docs = filtered_docs
     # --- END FILTERING ---
 
-    # --- GROUPING AND SORTING ---
-    grouped_events = {
-        "Date-specific": [],
-        "Weekday-based": [],
-        "Appointment/Daily-based": [],
+    # --- GROUPING AND SORTING (RE-IMPLEMENTED: BY CATEGORY THEN TIME) ---
+    
+    # 1. Define the sort order
+    category_order = {
+        "Date-specific": 1,
+        "Weekday-based": 2,
+        "Appointment/Daily-based": 3,
     }
 
-    # 1. Group documents and assign sort keys
+    # 2. Assign sort keys (Time key is needed for secondary sort)
     for doc in docs:
-        level = get_event_level(doc.metadata)
-        doc.metadata['_level'] = level
-        doc.metadata['_sort_time'] = parse_time_for_sort(doc.metadata.get('time', ''))
-        grouped_events[level].append(doc)
+        doc.metadata['_sort_time'] = parse_time_for_sort(doc.metadata.get('time', '')) # Uses re-added helper
 
-    # 2. Sort documents within each group by time
-    for level, doc_list in grouped_events.items():
-        doc_list.sort(key=lambda d: d.metadata['_sort_time'])
+    # 3. Create a sorting key function
+    def get_sort_key(doc):
+        category = doc.metadata.get('category', '')
+        # Sort first by category (1, 2, 3), then by time
+        return (category_order.get(category, 4), doc.metadata['_sort_time'])
 
-    # 3. Create the final ordered list
-    final_ordered_docs = []
-    order = ["Date-specific", "Weekday-based", "Appointment/Daily-based"]
-    
-    for level in order:
-        final_ordered_docs.extend(grouped_events[level])
+    # 4. Sort the documents
+    try:
+        final_ordered_docs = sorted(docs, key=get_sort_key)
+    except Exception as e:
+        logger.error(f"Error during category/time sorting: {e}")
+        final_ordered_docs = docs # Fallback to unsorted list
 
     # Remove duplicates
     EVENT_DATA_STORE.clear()
@@ -314,13 +352,16 @@ def search_auroville_events(
     else:
         final_output.append(f"Found {count} events. Click a name to see details:\n")
         
-        current_level = None
+        current_category = None
         for doc in unique_docs:
-            level = get_event_level(doc.metadata) 
-            if level != current_level:
+            # Use the category metadata directly from the doc
+            category = doc.metadata.get('category', 'Other Events') 
+            if not category: category = "Other Events" # Handle blank category
+            
+            if category != current_category:
                 # Add a bold header for each new group
-                final_output.append(f"\n## 📅 **{level} Events**")
-                current_level = level
+                final_output.append(f"\n## 📅 **{category}**")
+                current_category = category
             final_output.append(format_summary_line(doc.metadata))
             
         if specificity.lower() == "broad":
@@ -349,10 +390,7 @@ You have access to two tools:
 
 The `search_auroville_events` tool automatically applies these rules:
 * **Filtering:** Only shows **upcoming or ongoing** events; events whose date/time has passed are excluded.
-* **Grouping & Sorting:** Events are grouped by type and then sorted chronologically by time:
-    1. **Date-specific** events (e.g., Nov 14th)
-    2. **Weekday-based** events (e.g., Every Monday)
-    3. **Appointment/Daily-based** events
+* **Grouping & Sorting:** Events are grouped by **Category** (Date-specific, Weekday-based, etc.) and then sorted **chronologically by time** within each group.
 * **Do not hallucinate any event details. If a specific event is not found, state that you are not sure.**
 
 ### **Workflow**
