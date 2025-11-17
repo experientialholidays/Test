@@ -1,158 +1,141 @@
-import os
-import logging
+    import gradio as gr
 import asyncio
-import gradio as gr
-# Import the agent and data store from your auroville_agent module
-from auroville_agent import auroville_agent, EVENT_DATA_STORE, format_event_card
+import os
+from dotenv import load_dotenv
+from agents import Runner, trace, gen_trace_id
+from vector_db import VectorDBManager
+from db import SessionDBManager
+from session_handler import SessionHandler
+from auroville_agent import auroville_agent
+import logging
 
-# --- 1. Setup & Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- 2. Gradio Interface Function ---
+# Load environment variables
+load_dotenv(override=True)
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
-async def agent_query_handler(user_input: str) -> str:
+SESSION_DB_FILE = "sessions.db"
+session_db_manager = SessionDBManager(db_file=SESSION_DB_FILE)
+session_handler = SessionHandler(session_db_manager=session_db_manager)
+
+
+# -----------------------------
+# ASYNC STREAMING CHAT FUNCTION
+# -----------------------------
+async def streaming_chat(question, history, session_id):
     """
-    Handles user input, calls the async agent, and manages dynamic clicks.
+    Handle streaming chat using OpenAI Agents SDK with real streaming.
+    This is an async generator that Gradio can handle natively.
     """
-    if not user_input.strip():
-        return "Please enter a question to search for events."
-
-    # --- Handle #FETCH:: Click Logic ---
-    if user_input.startswith("#FETCH::"):
-        try:
-            # Extract the safe_key from the command, e.g., #FETCH::Event%20Name
-            safe_key = user_input.split("::")[1]
-            doc = EVENT_DATA_STORE.get(safe_key)
-            
-            if doc:
-                # Use your existing formatting helper to return the full card
-                return format_event_card(doc.metadata, doc.page_content)
-            else:
-                return "Error: Event details not found in the cache. Please run the search again."
-        except Exception as e:
-            return f"Error processing fetch request: {e}"
-
-    # --- Handle New Search Query ---
+    logger.info(f'Processing chat for session: {session_id}')
+    
+    if not session_id or session_id == "null":
+        logger.info("ERROR: No valid session_id!")
+        return
+    
+    # Save user message
+    session_handler.save_message(session_id, "user", question)
+    
+    # Build conversation history for agent
+    messages = history.copy()  # already [{"role": ..., "content": ...}]
+    messages.append({"role": "user", "content": question})
+    
     try:
-        response_text = await auroville_agent.ainvoke(
-             {"user_input": user_input, "session_id": "gradio_session"}
-        )
-        # 🐛 FIX APPLIED HERE: Correctly indented to be inside the try block
-        return response_text 
+        response_text = ""
+        tool_call_in_progress = False
+        # Clean the history to keep only 'role' and 'content'
+        clean_message = [{"role": m["role"], "content": m["content"]} for m in messages if "role" in m and "content" in m]
 
-    except RuntimeError as e:
-        # This catches the RuntimeError raised by get_initialized_retriever()
-        if "Retriever initialization failed" in str(e):
-             return "🚨 System Error: The event database failed to load during the request. This may be due to a Cloud Run startup timeout. Please try again in 30 seconds."
-        return f"An unexpected error occurred during agent execution: {e}"
+        # Stream using Agent directly
+        trace_id = gen_trace_id()
+        with trace("Auroville chatbot", trace_id=trace_id):
+            logger.info(f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}")
+            # trace_msg = f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}"
+            # updated_history = history.copy()
+            # updated_history.append({"role": "user", "content": question})
+            # updated_history.append({"role": "assistant", "content": trace_msg})
+            # yield updated_history
+            
+            result = Runner.run_streamed(auroville_agent, clean_message)
+            
+            async for event in result.stream_events():
+                # Handle different event types
+                event_type_name = type(event).__name__
+                if event_type_name == "RawResponsesStreamEvent":
+                    data = event.data
+                    # Only handle text delta events
+                    if data.__class__.__name__ == "ResponseTextDeltaEvent":
+                        response_text += data.delta  # append incremental text
+                        updated_history = history.copy()
+                        updated_history.append({"role": "user", "content": question})
+                        updated_history.append({"role": "assistant", "content": response_text})
+                        yield updated_history
+            
+        # Save assistant response
+        if response_text:
+            session_handler.save_message(session_id, "assistant", response_text)
+        else:
+            error_msg = "I apologize, but I couldn't generate a proper response. Please try again."
+            updated_history = history.copy()
+            updated_history.append({"role": "user", "content": question})
+            updated_history.append({"role": "assistant", "content": error_msg})
+            yield updated_history
+            session_handler.save_message(session_id, "assistant", error_msg)
         
     except Exception as e:
-        return f"An unexpected error occurred: {e}"
+        error_msg = f"I encountered an error: {str(e)}. Please try again."
+        logger.error(f"Error: {e}")
+        updated_history = history.copy()
+        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "assistant", "content": error_msg})
+        yield updated_history
+        session_handler.save_message(session_id, "assistant", error_msg)
 
-# --- 3. Gradio Blocks Setup ---
-
-with gr.Blocks(title="Auroville Events Assistant") as demo:
-    gr.Markdown("# 📅 Auroville Events Assistant")
-    gr.Markdown(
-        "Ask a question about events, workshops, or activities (e.g., 'What events are happening tomorrow in Youth Centre?').\n\n"
-        "**NOTE:** If the first search is slow, it is loading the database. Subsequent searches will be faster."
-    )
-
-    query_box = gr.Textbox(
-        label="Your Query", 
-        placeholder="e.g., What is happening this weekend?", 
-        lines=2
-    )
-    
-    # Assign an ID to the output box for the JavaScript observer to target reliably
-    output_box = gr.Markdown(
-        label="Event Search Results", 
-        value="Results will appear here. Click on an event name for full details.",
-        elem_id="output_box_id"
-    )
-
-    submit_btn = gr.Button("Search Events", variant="primary")
-
-    submit_btn.click(
-        fn=agent_query_handler,
-        inputs=[query_box],
-        outputs=[output_box],
-        queue=True
-    )
-    
-    # --- Interactivity Hook for Fetching Details ---
-    
-    # 1. Hidden input that receives the custom markdown link content
-    fetch_trigger = gr.Textbox(visible=False, label="Fetch Trigger", elem_id="fetch_trigger_id")
-
-    # 2. Hidden button that listens for the JS trigger to execute the fetch logic
-    fetch_hidden_btn = gr.Button("Fetch Details", elem_id="fetch_hidden_btn", visible=False)
-
-    # 3. Hidden button's click handler runs the agent_query_handler with the FETCH command
-    fetch_hidden_btn.click(
-        fn=agent_query_handler,
-        inputs=[fetch_trigger],
-        outputs=[output_box],
-        queue=False 
-    )
-    
-    # 4. Global JS Injection using gr.HTML (Workaround for _js TypeError)
-    # This code block injects the JavaScript observer globally using the HTML component.
-    js_code = """
-    <script>
-        function attachFetchListeners() {
-            const outputElement = document.getElementById('output_box_id');
-            if (outputElement) {
-                // Find all links that start with #FETCH::
-                outputElement.querySelectorAll('a[href^="#FETCH::"]').forEach(link => {
-                    // Prevent multiple listeners if the function is called multiple times
-                    if (!link.hasAttribute('data-fetch-listener')) {
-                        link.setAttribute('data-fetch-listener', 'true');
-                        link.onclick = function(e) {
-                            e.preventDefault();
-                            const fetchCommand = this.getAttribute('href').substring(1);
-                            
-                            // Target the textarea inside the hidden fetch_trigger box
-                            const triggerElement = document.getElementById('fetch_trigger_id').querySelector('textarea');
-                            if (triggerElement) {
-                                triggerElement.value = fetchCommand;
-                                
-                                // Click the hidden button to trigger the fetch_details logic
-                                document.getElementById('fetch_hidden_btn').click();
-                            }
-                        };
-                    }
-                });
-            }
-        }
-
-        // Use a MutationObserver to re-attach the listeners whenever the output content changes
-        const observerTarget = document.getElementById('output_box_id');
-        if (observerTarget) {
-            const observer = new MutationObserver(attachFetchListeners);
-            // Observe changes to the content and subtree
-            observer.observe(observerTarget, { childList: true, subtree: true });
-        }
-        
-        // Also run on initial load
-        attachFetchListeners();
-    </script>
-    """
-    # Insert the JS code as raw HTML at the end of the demo
-    gr.HTML(js_code)
-
-
-# --- 4. Launch Settings for Cloud Run ---
-
+# -----------------------------
+# GRADIO APP
+# -----------------------------
 if __name__ == "__main__":
-    # Cloud Run uses the PORT environment variable
-    port = int(os.environ.get("PORT", 7860))
+    with gr.Blocks() as demo:
+        gr.Markdown("# 🤖 Auroville Events Chatbot")
+        # Session components (hidden)
+        session_id_state = gr.State(value="")
+        session_id_bridge = gr.Textbox(value="", visible=False)
+        temp_storage_state = gr.State(value="")  
+        # Chat interface
+        chatbot = gr.Chatbot(height=500, value=[],type='messages')
+        msg = gr.Textbox( placeholder="Ask me anything about Auroville events...",lines=1,label="Message",show_label=False )
+        
+        # Buttons
+        with gr.Row():
+            submit = gr.Button("Send", variant="primary")
+            clear = gr.Button("Clear Chat")
+            new_session_btn = gr.Button("New Session")
+        
+        # Setup session handlers (load & new session)
+        session_handler.setup_session_handlers(
+            demo=demo,
+            session_id_state=session_id_state,
+            session_id_bridge=session_id_bridge,
+            temp_storage_state=temp_storage_state,
+            chatbot=chatbot,
+            new_session_btn=new_session_btn
+        )        
+        # Message submission handlers
+        msg.submit(streaming_chat,inputs=[msg, chatbot, session_id_state],outputs=[chatbot]).then(lambda: "",None,msg )
+        submit.click(streaming_chat,inputs=[msg, chatbot, session_id_state],outputs=[chatbot]).then(lambda: "",None,msg)       
+        # Clear chat (UI only)
+        clear.click(lambda: [], None, chatbot)
+
+    logger.info("App started with OpenAI Agents SDK - Real Streaming Enabled")
     
-    # Set the server name to '0.0.0.0' to listen on all interfaces (required for Docker/Cloud Run)
-    demo.queue().launch(
-        server_name="0.0.0.0",
-        server_port=port,
-        # Setting a concurrency limit can sometimes help manage resources on Cloud Run
-        max_threads=20 
-    )
+    # --- START OF CLOUD RUN FIX ---
+    # Cloud Run requires the server to listen on 0.0.0.0 and the port specified by the PORT environment variable (usually 8080).
+    server_port = int(os.environ.get("PORT", 8080))
+    server_host = "0.0.0.0"
+    
+    # Launch Gradio on the mandatory host and port
+    # Set debug=False and inbrowser=False for production environment
+    demo.launch(server_name=server_host, server_port=server_port, inbrowser=False, debug=False)
+    # --- END OF CLOUD RUN FIX ---
