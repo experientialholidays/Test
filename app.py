@@ -35,10 +35,11 @@ async def agent_query_handler(user_input: str) -> str:
 
     # --- Handle New Search Query ---
     try:
-         response_text = await auroville_agent.ainvoke(
-         {"user_input": user_input, "session_id": "gradio_session"}
-         )
-        return response_text
+        response_text = await auroville_agent.ainvoke(
+             {"user_input": user_input, "session_id": "gradio_session"}
+        )
+        # 🐛 FIX APPLIED HERE: Correctly indented to be inside the try block
+        return response_text 
 
     except RuntimeError as e:
         # This catches the RuntimeError raised by get_initialized_retriever()
