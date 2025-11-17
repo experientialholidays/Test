@@ -13,52 +13,6 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 # -------------------------------------------------------------------------
-# Date/Time Helper Functions (NEW)
-# -------------------------------------------------------------------------
-
-def is_date_specific(date_str, day_str):
-    """Classifies an event as date-specific."""
-    # A specific date is anything that is not blank or a common placeholder
-    return bool(date_str and date_str.lower() not in ('', 'n/a', 'upcoming', 'none'))
-
-def is_weekday_based(day_str):
-    """Classifies an event as weekday-based."""
-    weekday_names = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday')
-    if day_str:
-        return any(name in day_str.lower() for name in weekday_names)
-    return False
-
-def get_event_level(doc_metadata: dict) -> str:
-    """Groups events into three defined levels: Date-specific, Weekday-based, or Appointment/Daily-based."""
-    date_str = doc_metadata.get('date', '').strip()
-    day_str = doc_metadata.get('day', '').strip()
-
-    if is_date_specific(date_str, day_str):
-        return "Date-specific"
-    elif is_weekday_based(day_str):
-        return "Weekday-based"
-    else:
-        return "Appointment/Daily-based"
-
-def parse_time_for_sort(time_str: str) -> time:
-    """Parses a time string into a sortable time object. Defaults to 23:59:59 if unparseable."""
-    if not time_str or time_str.lower() in ('', 'n/a', 'none', 'check details'):
-        return time(23, 59, 59) # Sorts to the end
-
-    time_str = time_str.replace('.', ':').strip().upper()
-    
-    # Try common time formats
-    for fmt in ('%I:%M %p', '%H:%M', '%I:%M'):
-        try:
-            # We use a dummy date for parsing, only the time is relevant
-            dt = datetime.strptime(time_str, fmt)
-            return dt.time()
-        except ValueError:
-            continue
-            
-    return time(23, 59, 59) # Default to end if unparseable
-
-# -------------------------------------------------------------------------
 
 class VectorDBManager:
     def __init__(self, folder="input", db_name="vector_db", chunk_size=2000, chunk_overlap=200):
@@ -83,6 +37,7 @@ class VectorDBManager:
             "Contact Person/Unit": "contact", 
             "Contact Phone/Whatsapp": "phone", 
             "Website/Link": "poster_url",
+            "Category": "category", # <-- ADDED
         }
 
     def load_documents(self):
@@ -121,6 +76,7 @@ class VectorDBManager:
                         
                         contact_info = row.get("contact person/unit", "").strip()
                         phone_number = row.get("contact phone/whatsapp", "").strip() 
+                        category = row.get("category", "").strip() # <-- ADDED
                         
                         # Handle poster_url separately: None is better than "" if it's blank
                         poster_url_raw = row.get("website/link", "").strip()
@@ -162,6 +118,7 @@ class VectorDBManager:
                                         "contact": contact_info,
                                         "poster_url": poster_url, 
                                         "phone": phone_number,
+                                        "category": category if category else "", # <-- ADDED
                                         # --- END AGENT METADATA KEYS ---
                                     },
                                 )
@@ -176,7 +133,8 @@ class VectorDBManager:
                     doc.metadata.update({
                         "day": "", "date": "", "location": "",
                         "title": "Document Content", "time": "", "contribution": "",
-                        "contact": "", "poster_url": None, "phone": ""
+                        "contact": "", "poster_url": None, "phone": "",
+                        "category": "" # <-- ADDED
                     })
                     documents.append(doc)
 
@@ -188,7 +146,8 @@ class VectorDBManager:
                     doc.metadata.update({
                         "day": "", "date": "", "location": "",
                         "title": "Document Content", "time": "", "contribution": "",
-                        "contact": "", "poster_url": None, "phone": ""
+                        "contact": "", "poster_url": None, "phone": "",
+                        "category": "" # <-- ADDED
                     })
                     documents.append(doc)
 
