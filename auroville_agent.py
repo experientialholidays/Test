@@ -1,4 +1,3 @@
-
 import os
 import logging
 import urllib.parse
@@ -54,9 +53,9 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 google_api_key = os.getenv('GOOGLE_API_KEY')
 
 db_manager = VectorDBManager(folder=DB_FOLDER, db_name=VECTOR_DB_NAME)
-vectorstore = db_manager.create_or_load_db()
-initialize_retriever(vectorstore)
 
+# --- CRITICAL FIX: LAZY INITIALIZATION ---
+retriever = None 
 
 def initialize_retriever(vectorstore):
     """Initializes the global retriever instance after vectorstore creation."""
@@ -66,6 +65,12 @@ def initialize_retriever(vectorstore):
         logger.info("Auroville agent retriever successfully initialized.")
     else:
         logger.error("Failed to initialize retriever: Vectorstore is None.")
+
+# -------------------------------------------------------------------------
+# REQUIRED INITIALIZATION (moved here so function exists before call)
+# -------------------------------------------------------------------------
+vectorstore = db_manager.create_or_load_db()
+initialize_retriever(vectorstore)
 
 gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
@@ -400,7 +405,7 @@ The `search_auroville_events` tool automatically applies these rules:
     * specificity: "Broad"
     * filter_day, filter_date, filter_location: null
 
-2.  For all other event-related queries, first call **`vectordb_query_selector_agent`** with the user's question.
+2.  For all other event-related queries, first call **vectordb_query_selector_agent** with the user's question.
 3.  Then use **`search_auroville_events`** tool with the outputs from step 1 or step 2.
 
 4. **FINAL STEP (CRITICAL):** Once you receive the output from the `search_auroville_events` tool, you **MUST** process it. Your final response to the user must be the **exact content** of the tool output, but with these minor cleanups:
