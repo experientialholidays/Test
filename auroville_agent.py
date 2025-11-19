@@ -21,13 +21,11 @@ def is_date_specific(date_str, day_str):
     return bool(date_str and str(date_str).strip().lower() not in ('', 'n/a', 'upcoming', 'none'))
 
 # -------------------------------------------------------------------------
-# Robust Time Parser for Sorting (improved)
+# Robust Time Parser for Sorting
 # -------------------------------------------------------------------------
 def parse_time_for_sort(raw: str) -> time:
     """
     Extracts the first valid time in a messy time string for sorting.
-    Handles ranges with dashes, multiple slots, AM/PM at end of range,
-    missing minutes, unicode dashes, and simple textual labels.
     Returns a time object (defaults to 23:59:59 if unparseable).
     """
     if not raw:
@@ -35,16 +33,15 @@ def parse_time_for_sort(raw: str) -> time:
 
     s = str(raw).replace("—", "-").replace("–", "-").strip().upper()
 
-    # If clearly non-specific
+    # Non-specific indicators -> push to end
     if re.search(r'\bANYTIME\b|\bOPEN\b|\bALL DAY\b', s):
         return time(23, 59, 59)
 
-    # Find tokens like "8:30 AM", "8 AM", "8", etc.
     token_pattern = re.compile(r'(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?')
     tokens = list(token_pattern.finditer(s))
 
     if not tokens:
-        # Try pattern "7-9 AM" (AM/PM trailing)
+        # Try pattern like "7-9 AM"
         trailing = re.search(r'(\d{1,2})(?::(\d{2}))?[-\s]*\d{1,2}(?::\d{2})?\s*(AM|PM)', s)
         if trailing:
             h = int(trailing.group(1))
@@ -57,7 +54,6 @@ def parse_time_for_sort(raw: str) -> time:
             return time(h, m)
         return time(23, 59, 59)
 
-    # Prefer first token that has AM/PM. Otherwise take first token and try to infer meridian.
     chosen = None
     mer = None
     for t in tokens:
@@ -68,7 +64,6 @@ def parse_time_for_sort(raw: str) -> time:
 
     if not chosen:
         chosen = tokens[0]
-        # Look ahead for AM/PM in a short window after token (e.g., "7-9 AM")
         after = s[chosen.end(): chosen.end() + 10]
         m_after = re.search(r'\b(AM|PM)\b', after)
         mer = m_after.group(1) if m_after else None
@@ -81,7 +76,6 @@ def parse_time_for_sort(raw: str) -> time:
     if mer == "AM" and hour == 12:
         hour = 0
 
-    # Clamp sanity
     if hour < 0 or hour > 23:
         return time(23, 59, 59)
     if minute < 0 or minute > 59:
@@ -96,7 +90,8 @@ def parse_time_for_sort(raw: str) -> time:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-EVENT_DATA_STORE: Dict[str, Document] = {}
+# EVENT_DATA_STORE maps integer index -> Document (current search results)
+EVENT_DATA_STORE: Dict[int, Document] = {}
 
 VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
@@ -106,7 +101,6 @@ google_api_key = os.getenv('GOOGLE_API_KEY')
 
 db_manager = VectorDBManager(folder=DB_FOLDER, db_name=VECTOR_DB_NAME)
 
-# lazy init
 retriever = None
 
 def initialize_retriever(vectorstore):
@@ -117,11 +111,10 @@ def initialize_retriever(vectorstore):
     else:
         logger.error("Failed to initialize retriever: Vectorstore is None.")
 
-# ---------------- REQUIRED ORDER FIX ----------------
+# Initialize vectorstore and retriever (lazy creation happens inside VectorDBManager)
 vectorstore = db_manager.create_or_load_db()
 initialize_retriever(vectorstore)
 
-# Model
 gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
 
@@ -130,6 +123,7 @@ gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_clie
 # -------------------------------------------------------------------------
 
 def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
+    """Full event card for detail view."""
     title = doc_metadata.get('title', 'Event').strip()
     date_str = doc_metadata.get('date', '').strip()
     day_str = doc_metadata.get('day', '').strip()
@@ -180,11 +174,12 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
 
     return "\n".join(filter(None, output))
 
-
-def format_summary_line(doc_metadata: Dict) -> str:
+def format_summary_numbered(index: int, doc_metadata: Dict) -> str:
     """
-    Formats the summary line with an INTERNAL fetch link.
-    IMPORTANT: link must be a fragment #FETCH::key so frontend can intercept it.
+    Summary single-line for numbered listing including clickable code snippet for Gradio:
+    Example:
+    3. Event Title — 5 PM @ Verite
+       👉 View details: `3`
     """
     title = doc_metadata.get('title', 'Event').strip()
     day = doc_metadata.get('day', '').strip()
@@ -194,30 +189,27 @@ def format_summary_line(doc_metadata: Dict) -> str:
     phone_number = doc_metadata.get('phone', '').strip()
     category = doc_metadata.get('category', '').strip()
 
-    safe_key = urllib.parse.quote(title, safe='')
-    link_target = f"#FETCH::{safe_key}"
-
-    summary = [f"- [**{title}**]({link_target})"]
-
-    details = []
-    if category: details.append(f"({category})")
-    if day: details.append(day)
-    if time_str: details.append(time_str)
-    if loc: details.append(f"@{loc}")
-    if contribution: details.append(f"| Contribution: {contribution}")
-
+    parts = []
+    if day:
+        parts.append(day)
+    if time_str:
+        parts.append(time_str)
+    if loc:
+        parts.append(f"@{loc}")
+    if contribution:
+        parts.append(f"| Contrib: {contribution}")
     clean_phone = ''.join(filter(str.isdigit, phone_number))
     if clean_phone:
-        details.append(f"| Ph: {clean_phone}")
+        parts.append(f"| Ph: {clean_phone}")
 
-    if details:
-        summary.append("|")
-        summary.append(" ".join(details))
-
-    return " ".join(summary)
+    detail_line = " ".join(parts).strip()
+    if detail_line:
+        return f"{index}. **{title}** — {detail_line}\n   👉 View details: `{index}`"
+    else:
+        return f"{index}. **{title}**\n   👉 View details: `{index}`"
 
 # -------------------------------------------------------------------------
-# 3. search_auroville_events tool
+# 3. Tools
 # -------------------------------------------------------------------------
 
 @function_tool
@@ -228,8 +220,12 @@ def search_auroville_events(
     filter_date: Optional[str] = None,
     filter_location: Optional[str] = None
 ) -> str:
-
-    global retriever
+    """
+    Searches the vector DB, filters upcoming events, sorts by time within categories,
+    and returns a numbered summary where each event is separate and stored in EVENT_DATA_STORE
+    keyed by integer index (1-based).
+    """
+    global retriever, EVENT_DATA_STORE
     if retriever is None:
         logger.error("Retriever is not initialized. Cannot perform search.")
         return "The event database is still initializing. Please try again."
@@ -253,8 +249,10 @@ def search_auroville_events(
                 except: continue
         except: pass
 
-    if filter_day: simple_filters["day"] = filter_day
-    if filter_location: simple_filters["location"] = filter_location
+    if filter_day:
+        simple_filters["day"] = filter_day
+    if filter_location:
+        simple_filters["location"] = filter_location
 
     if len(simple_filters) == 1:
         k, v = list(simple_filters.items())[0]
@@ -266,7 +264,6 @@ def search_auroville_events(
     if chroma_filter:
         kwargs["filter"] = chroma_filter
 
-    # Execute search (retriever may be LangChain/Chroma retriever)
     docs = retriever.invoke(search_query, **kwargs)
 
     if not docs:
@@ -277,8 +274,8 @@ def search_auroville_events(
     today = now.date()
     now_t = now.time()
 
-    filtered = []
-    seen = set()  # to dedupe exact duplicates by (title,date,day)
+    filtered: List[Document] = []
+    seen = set()  # dedupe by (title, date, day)
     for doc in docs:
         title = doc.metadata.get('title')
         date_str = (doc.metadata.get('date') or "").strip()
@@ -310,7 +307,6 @@ def search_auroville_events(
                     if event_dt.date() == today and event_dt.time() < now_t:
                         continue
             except:
-                # if parsing fails, keep the event for safety
                 pass
 
         seen.add(dedup_key)
@@ -319,11 +315,10 @@ def search_auroville_events(
     if not filtered:
         return "I couldn't find any upcoming or ongoing events matching those criteria."
 
-    # --- NORMALIZE CATEGORY and assign sort-time ---
+    # --- NORMALIZE CATEGORY & assign sort-time ---
     for doc in filtered:
         doc.metadata["_sort_time"] = parse_time_for_sort(doc.metadata.get("time", ""))
 
-        # Normalize category names for consistent grouping/sorting
         raw_cat = (doc.metadata.get("category") or "").strip().lower()
         if "date" in raw_cat:
             doc.metadata["category"] = "Date-specific Events"
@@ -332,7 +327,6 @@ def search_auroville_events(
         elif "appoint" in raw_cat or "daily" in raw_cat or "everyday" in raw_cat:
             doc.metadata["category"] = "Daily / Appointment-based Events"
         else:
-            # infer if blank
             if is_date_specific(doc.metadata.get('date', ''), doc.metadata.get('day', '')):
                 doc.metadata["category"] = "Date-specific Events"
             elif doc.metadata.get('day'):
@@ -340,23 +334,20 @@ def search_auroville_events(
             else:
                 doc.metadata["category"] = "Daily / Appointment-based Events"
 
-    # --- BUCKETS: Category -> list of docs ---
+    # --- Buckets and sort within each category by time ---
     categories = ["Date-specific Events", "Weekly Events", "Daily / Appointment-based Events"]
     category_buckets: Dict[str, List[Document]] = {cat: [] for cat in categories}
-
     for doc in filtered:
         cat = doc.metadata.get("category", "Daily / Appointment-based Events")
-        if cat not in category_buckets:
-            category_buckets.setdefault(cat, [])
-        category_buckets[cat].append(doc)
+        category_buckets.setdefault(cat, []).append(doc)
 
-    # Sort docs within each category by _sort_time (earliest first)
     for cat in category_buckets:
         category_buckets[cat].sort(key=lambda d: d.metadata.get("_sort_time", time(23, 59, 59)))
 
-    # Build EVENT_DATA_STORE (one key per event) and prepare output lines
+    # --- Build numbered summary and populate EVENT_DATA_STORE ---
     EVENT_DATA_STORE.clear()
-    out_lines = []
+    out_lines: List[str] = []
+    idx = 0
     total_events = 0
 
     for cat in categories:
@@ -366,68 +357,89 @@ def search_auroville_events(
 
         out_lines.append(f"\n## 📅 **{cat}**")
         for d in bucket:
-            # Each event remains separate; create a safe key per event title
-            title = d.metadata.get('title', 'Event')
-            safe_key = urllib.parse.quote(title, safe='')
-
-            # Ensure key uniqueness: if collision (same title), append an index
-            base_key = safe_key
-            idx = 1
-            while safe_key in EVENT_DATA_STORE:
-                safe_key = urllib.parse.quote(f"{title}::{idx}", safe='')
-                idx += 1
-
-            EVENT_DATA_STORE[safe_key] = d
-
-            # Use the summary formatter (preserves internal fragment link)
-            out_lines.append(format_summary_line(d.metadata))
-
+            idx += 1
+            EVENT_DATA_STORE[idx] = d
+            out_lines.append(format_summary_numbered(idx, d.metadata))
             total_events += 1
 
-    header = f"Found {total_events} event(s). Click a name to see details:\n"
+    header = f"Found {total_events} event(s). Click a code block then press Enter to fetch details:\n"
     final_output = header + "\n".join(out_lines)
 
     return final_output
+
+@function_tool
+def get_event_details(identifier: str) -> str:
+    """
+    Fetch an event from the current EVENT_DATA_STORE.
+    Accepts:
+      - a plain integer as string: "3"
+      - function-style "details(3)"
+    Returns formatted event card (string) or helpful error message.
+    This does NOT perform a new search; it only reads the current cache.
+    """
+    global EVENT_DATA_STORE
+    if identifier is None:
+        return "No event identifier provided."
+
+    # Extract number if possible
+    ident = str(identifier).strip()
+
+    m = re.match(r'^\s*details\(\s*(\d+)\s*\)\s*$', ident, re.IGNORECASE)
+    if m:
+        num = int(m.group(1))
+    elif ident.isdigit():
+        num = int(ident)
+    else:
+        return "I could not parse that identifier. Use the plain number (e.g. `3`) or `details(3)`."
+
+    doc = EVENT_DATA_STORE.get(num)
+    if not doc:
+        return f"I could not find an event numbered {num} in the latest results."
+
+    # Return full event card; include index for consistency
+    card = format_event_card(doc.metadata, doc.page_content)
+    return f"{num}. {card}"
 
 # -------------------------------------------------------------------------
 # 4. Agent Instructions
 # -------------------------------------------------------------------------
 
 INSTRUCTIONS = f"""
-You are an **AI Event Information Extractor** dedicated to providing structured and accurate event details from the Auroville community.
+You are an **AI Event Information Extractor** for Auroville events.
 
 Today's date is {datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")}.
 
-Set your temperature **0.1**.
+Set temperature to 0.1.
 
-Your role is to help users find information about events, activities, workshops, and schedules.
+Workflow & Rules:
+1) Normal user queries (e.g., "events tomorrow") -> First call `vectordb_query_selector_agent` (to refine) then call `search_auroville_events` with the refined query. Present the **exact** returned tool output to the user (after minor grammar fixes), but **do NOT change or remove** the numbered code blocks shown in the summary.
 
-You have access to two tools:
-1) **`vectordb_query_selector_agent`**: Generates the best possible refined search query and specificity.
-2) **`search_auroville_events`**: Searches the vector database and filters results.
+2) If the user's message is a plain integer (e.g., "4") OR matches `details(NUM)` (e.g., `details(4)`), you MUST NOT call the vector DB or the selector. Instead, CALL the tool `get_event_details` with that identifier and return its output.
 
-### **Event Rules Applied by Search Tool**
-* Shows only **upcoming or ongoing** events.
-* Groups events into these categories: **Date-specific Events**, **Weekly Events**, **Daily / Appointment-based Events**.
-* Keeps each event separate (no merging by contact). Each event has its own FETCH link that maps to a stored Document in the backend.
-* Sorts events inside each category chronologically by the earliest parsable time in the `time` field.
-* Never hallucinate event details.
+3) The summary output uses numbered entries. The assistant must instruct users they can click the inline code (e.g., `3`) and press Enter to fetch details. The assistant should not modify or remove these inline code tokens.
 
-### **Workflow**
-1. If the user's question is exactly "daily and appointment-based events", skip the selector tool and call `search_auroville_events` with search_query="daily and appointment-based events", specificity="Broad".
-2. Otherwise call `vectordb_query_selector_agent` to refine the search query and specificity, then call `search_auroville_events`.
-3. After receiving the tool output, you MAY fix small grammar issues and remove accidental duplicated lines, but:
+4) The assistant MAY fix small grammar issues in plain text outside the numbered code blocks, and may remove accidental duplicate textual lines, but MUST NOT alter or rewrite the numbered entries or their code blocks.
 
-### ABSOLUTE RULES (CRITICAL)
-* DO NOT modify, reformat, rewrite or convert ANY Markdown fetch link. Links must remain exactly as produced by the tool, in this form: `[**Event Title**](#FETCH::EncodedKey)`.
-* DO NOT convert fetch fragments into absolute URLs (do NOT add https://host/...).
-* DO NOT change any text inside the square brackets `[...]` or inside the parentheses `( ... )` of fetch links.
-* You may only clean the plain text outside of those links (fix grammar, remove accidental repeated phrases, remove duplicate lines), but leave the link tokens untouched.
+5) Never convert or rewrite the numbered code blocks into URLs or other formats. Do not create other link types. The frontend (Gradio) copies code blocks into the input field when clicked — rely on that behavior.
+
+6) When returning details from `get_event_details`, do not perform any additional search or re-ranking — return the cached event card.
+
+7) If an invalid index is given, return a short, helpful message like: "I could not find an event numbered 99 in the latest results."
+
+8) Do not hallucinate missing metadata — if a field is missing, omit it from the display.
+
+9) Keep categories as: Date-specific Events, Weekly Events, Daily / Appointment-based Events.
+
+10) If the user's question is exactly "daily and appointment-based events", skip the selector and call `search_auroville_events` with:
+   search_query="daily and appointment-based events", specificity="Broad".
+
+Always follow these rules.
 """
 
 tools = [
     vectordb_query_selector_agent.as_tool(tool_name="vectordb_query_selector_agent", tool_description="Refines query."),
-    search_auroville_events
+    search_auroville_events,
+    get_event_details
 ]
 
 auroville_agent = Agent(
