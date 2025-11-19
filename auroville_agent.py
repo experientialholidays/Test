@@ -35,21 +35,21 @@ def parse_time_for_sort(raw: str) -> time:
 
     s = str(raw).replace("—", "-").replace("–", "-").strip().upper()
 
-    # Quick check for patterns like "ANYTIME" -> put at start or end? treat as end
-    if re.search(r'\bANYTIME\b', s):
+    # If clearly non-specific
+    if re.search(r'\bANYTIME\b|\bOPEN\b|\bALL DAY\b', s):
         return time(23, 59, 59)
 
-    # Find all time-like tokens: e.g. "8:30 AM", "8 AM", "8", "2:30"
+    # Find tokens like "8:30 AM", "8 AM", "8", etc.
     token_pattern = re.compile(r'(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?')
     tokens = list(token_pattern.finditer(s))
 
     if not tokens:
-        # try to find times where AM/PM is trailing after a range: "7-9 AM"
-        trailing = re.search(r'(\d{1,2})(?::(\d{2}))?-\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)', s)
+        # Try pattern "7-9 AM" (AM/PM trailing)
+        trailing = re.search(r'(\d{1,2})(?::(\d{2}))?[-\s]*\d{1,2}(?::\d{2})?\s*(AM|PM)', s)
         if trailing:
             h = int(trailing.group(1))
             m = int(trailing.group(2)) if trailing.group(2) else 0
-            mer = trailing.group(5)
+            mer = trailing.group(3)
             if mer == "PM" and h != 12:
                 h += 12
             if mer == "AM" and h == 12:
@@ -59,21 +59,19 @@ def parse_time_for_sort(raw: str) -> time:
 
     # Prefer first token that has AM/PM. Otherwise take first token and try to infer meridian.
     chosen = None
+    mer = None
     for t in tokens:
-        if t.group(3):  # has AM/PM
+        if t.group(3):
             chosen = t
+            mer = t.group(3)
             break
 
     if not chosen:
         chosen = tokens[0]
-
-        # Try to infer meridian if there's an overall AM/PM after the token (e.g., "7-9 AM" or "7 am - 9")
-        # Look ahead a short window for AM/PM mention
-        after = s[tokens[0].end(): tokens[0].end() + 10]
+        # Look ahead for AM/PM in a short window after token (e.g., "7-9 AM")
+        after = s[chosen.end(): chosen.end() + 10]
         m_after = re.search(r'\b(AM|PM)\b', after)
         mer = m_after.group(1) if m_after else None
-    else:
-        mer = chosen.group(3)
 
     hour = int(chosen.group(1))
     minute = int(chosen.group(2)) if chosen.group(2) else 0
@@ -83,7 +81,7 @@ def parse_time_for_sort(raw: str) -> time:
     if mer == "AM" and hour == 12:
         hour = 0
 
-    # Sanity clamp
+    # Clamp sanity
     if hour < 0 or hour > 23:
         return time(23, 59, 59)
     if minute < 0 or minute > 59:
@@ -274,7 +272,7 @@ def search_auroville_events(
     if not docs:
         return "I couldn't find any upcoming events matching those criteria."
 
-    # --- FILTER OUT PAST EVENTS ---
+    # --- FILTER OUT PAST EVENTS & DEDUPE ---
     now = datetime.now()
     today = now.date()
     now_t = now.time()
@@ -282,9 +280,12 @@ def search_auroville_events(
     filtered = []
     seen = set()  # to dedupe exact duplicates by (title,date,day)
     for doc in docs:
+        title = doc.metadata.get('title')
         date_str = (doc.metadata.get('date') or "").strip()
+        day_val = (doc.metadata.get('day') or "").strip()
         time_str = (doc.metadata.get('time') or "").strip()
-        dedup_key = (doc.metadata.get('title'), date_str, doc.metadata.get('day'))
+
+        dedup_key = (title, date_str, day_val)
         if dedup_key in seen:
             continue
 
@@ -325,26 +326,26 @@ def search_auroville_events(
         # Normalize category names for consistent grouping/sorting
         raw_cat = (doc.metadata.get("category") or "").strip().lower()
         if "date" in raw_cat:
-            doc.metadata["category"] = "Date-specific"
+            doc.metadata["category"] = "Date-specific Events"
         elif "week" in raw_cat or "weekday" in raw_cat:
-            doc.metadata["category"] = "Weekday-based"
+            doc.metadata["category"] = "Weekly Events"
         elif "appoint" in raw_cat or "daily" in raw_cat or "everyday" in raw_cat:
-            doc.metadata["category"] = "Appointment/Daily-based"
+            doc.metadata["category"] = "Daily / Appointment-based Events"
         else:
-            # if category is blank, try to infer from presence of a date
+            # infer if blank
             if is_date_specific(doc.metadata.get('date', ''), doc.metadata.get('day', '')):
-                doc.metadata["category"] = "Date-specific"
+                doc.metadata["category"] = "Date-specific Events"
             elif doc.metadata.get('day'):
-                doc.metadata["category"] = "Weekday-based"
+                doc.metadata["category"] = "Weekly Events"
             else:
-                doc.metadata["category"] = "Appointment/Daily-based"
+                doc.metadata["category"] = "Daily / Appointment-based Events"
 
-    # --- GROUPING: First by category (keeps three groups), then within each category merge by contact ---
-    categories = ["Date-specific", "Weekday-based", "Appointment/Daily-based"]
+    # --- BUCKETS: Category -> list of docs ---
+    categories = ["Date-specific Events", "Weekly Events", "Daily / Appointment-based Events"]
     category_buckets: Dict[str, List[Document]] = {cat: [] for cat in categories}
 
     for doc in filtered:
-        cat = doc.metadata.get("category", "Appointment/Daily-based")
+        cat = doc.metadata.get("category", "Daily / Appointment-based Events")
         if cat not in category_buckets:
             category_buckets.setdefault(cat, [])
         category_buckets[cat].append(doc)
@@ -353,102 +354,37 @@ def search_auroville_events(
     for cat in category_buckets:
         category_buckets[cat].sort(key=lambda d: d.metadata.get("_sort_time", time(23, 59, 59)))
 
-    # Build merged groups by contact within each category
+    # Build EVENT_DATA_STORE (one key per event) and prepare output lines
     EVENT_DATA_STORE.clear()
     out_lines = []
-    total_groups = 0
-    # We'll keep order: Date-specific, Weekday-based, Appointment/Daily-based
+    total_events = 0
+
     for cat in categories:
         bucket = category_buckets.get(cat, [])
         if not bucket:
             continue
 
-        # Merge by contact key (phone preferred; else contact name; else unique title)
-        groups: Dict[str, List[Document]] = {}
-        for d in bucket:
-            phone = (d.metadata.get("phone") or "").strip()
-            contact = (d.metadata.get("contact") or "").strip()
-            # Normalize phone digits only
-            phone_digits = ''.join(filter(str.isdigit, phone)) if phone else ""
-            group_key = phone_digits if phone_digits else (contact if contact else d.metadata.get("title"))
-            groups.setdefault(group_key, []).append(d)
-
-        # For stable ordering of groups inside category, sort groups by earliest _sort_time among their items
-        sorted_group_items = sorted(
-            groups.items(),
-            key=lambda kv: min([doc.metadata.get("_sort_time", time(23, 59, 59)) for doc in kv[1]])
-        )
-
-        # Add category header
         out_lines.append(f"\n## 📅 **{cat}**")
-        for group_key, items in sorted_group_items:
-            # Build merged title for the group
-            # Use contact name or phone for display if available
-            representative = items[0].metadata.get("contact") or items[0].metadata.get("phone") or items[0].metadata.get("title")
-            # Make a readable display title
-            display_title = representative.strip()
-            if not display_title:
-                display_title = f"{items[0].metadata.get('title','Event')}"
-            merged_title = f"{display_title} ({len(items)} event{'s' if len(items) != 1 else ''})"
+        for d in bucket:
+            # Each event remains separate; create a safe key per event title
+            title = d.metadata.get('title', 'Event')
+            safe_key = urllib.parse.quote(title, safe='')
 
-            # Build merged document content: concise list of events (title, day, date, time, location, contribution)
-            merged_lines = []
-            for it in items:
-                t = it.metadata.get('title', '').strip()
-                day = it.metadata.get('day', '').strip()
-                date = it.metadata.get('date', '').strip()
-                tm = it.metadata.get('time', '').strip()
-                loc = it.metadata.get('location', '').strip()
-                contrib = it.metadata.get('contribution', '').strip()
+            # Ensure key uniqueness: if collision (same title), append an index
+            base_key = safe_key
+            idx = 1
+            while safe_key in EVENT_DATA_STORE:
+                safe_key = urllib.parse.quote(f"{title}::{idx}", safe='')
+                idx += 1
 
-                parts = []
-                if day:
-                    parts.append(day)
-                if date:
-                    parts.append(date)
-                if tm:
-                    parts.append(tm)
-                if loc:
-                    parts.append(f"@{loc}")
-                if contrib:
-                    parts.append(f"| Contrib: {contrib}")
+            EVENT_DATA_STORE[safe_key] = d
 
-                merged_lines.append(f"- **{t}** {' '.join(parts)}")
+            # Use the summary formatter (preserves internal fragment link)
+            out_lines.append(format_summary_line(d.metadata))
 
-            merged_content = "\n".join(merged_lines)
+            total_events += 1
 
-            # Create merged Document and store under a stable key for fetching
-            # Use category + CONTACT::group_key to avoid collisions across categories
-            safe_group_key = urllib.parse.quote(f"{cat}::CONTACT::{group_key}", safe='')
-
-            merged_doc = Document(
-                page_content=merged_content,
-                metadata={
-                    "title": merged_title,
-                    "contact": items[0].metadata.get('contact', ''),
-                    "phone": items[0].metadata.get('phone', ''),
-                    "category": cat,
-                    # Keep some other fields for the merged doc if needed
-                    "day": items[0].metadata.get('day', ''),
-                    "date": items[0].metadata.get('date', ''),
-                    "time": items[0].metadata.get('time', ''),
-                    "location": items[0].metadata.get('location', ''),
-                }
-            )
-
-            EVENT_DATA_STORE[safe_group_key] = merged_doc
-
-            # Output one line with internal fetch link (must be fragment so frontend intercepts)
-            out_lines.append(f"- [**{merged_title}**](#FETCH::{safe_group_key})")
-
-            total_groups += 1
-
-    # If no groups were added (shouldn't happen), fallback to listing final items individually
-    if total_groups == 0:
-        out_lines = ["Found 0 event groups."]
-
-    # Final assembled string
-    header = f"Found {total_groups} event group(s). Click a name to see details:\n"
+    header = f"Found {total_events} event(s). Click a name to see details:\n"
     final_output = header + "\n".join(out_lines)
 
     return final_output
@@ -472,15 +408,15 @@ You have access to two tools:
 
 ### **Event Rules Applied by Search Tool**
 * Shows only **upcoming or ongoing** events.
-* Groups events by **Category** into these categories: **Date-specific**, **Weekday-based**, **Appointment/Daily-based**.
-* Within each category, events from the **same contact (phone or contact person)** are MERGED into a single summary item with one clickable link. Clicking returns merged details for all events from that contact in that category.
-* Sorts groups chronologically by the earliest event time inside each group.
+* Groups events into these categories: **Date-specific Events**, **Weekly Events**, **Daily / Appointment-based Events**.
+* Keeps each event separate (no merging by contact). Each event has its own FETCH link that maps to a stored Document in the backend.
+* Sorts events inside each category chronologically by the earliest parsable time in the `time` field.
 * Never hallucinate event details.
 
 ### **Workflow**
 1. If the user's question is exactly "daily and appointment-based events", skip the selector tool and call `search_auroville_events` with search_query="daily and appointment-based events", specificity="Broad".
 2. Otherwise call `vectordb_query_selector_agent` to refine the search query and specificity, then call `search_auroville_events`.
-3. After receiving the tool output, you MAY fix small grammar issues and remove accidental duplicate event lines, but:
+3. After receiving the tool output, you MAY fix small grammar issues and remove accidental duplicated lines, but:
 
 ### ABSOLUTE RULES (CRITICAL)
 * DO NOT modify, reformat, rewrite or convert ANY Markdown fetch link. Links must remain exactly as produced by the tool, in this form: `[**Event Title**](#FETCH::EncodedKey)`.
