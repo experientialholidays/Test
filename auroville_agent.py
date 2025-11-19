@@ -54,9 +54,9 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 google_api_key = os.getenv('GOOGLE_API_KEY')
 
 db_manager = VectorDBManager(folder=DB_FOLDER, db_name=VECTOR_DB_NAME)
+vectorstore = db_manager.create_or_load_db()
+initialize_retriever(vectorstore)
 
-# --- CRITICAL FIX: LAZY INITIALIZATION ---
-retriever = None 
 
 def initialize_retriever(vectorstore):
     """Initializes the global retriever instance after vectorstore creation."""
