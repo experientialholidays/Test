@@ -37,10 +37,53 @@ class VectorDBManager:
             "Contact Person/Unit": "contact", 
             "Contact Phone/Whatsapp": "phone", 
             "Website/Link": "poster_url",
-            "Category": "category", # <-- ADDED
+            "Category": "category", 
         }
 
     def load_documents(self):
+        # --- SAFETY HELPER (ONLY NEW ADDITION) ---
+        def cell_to_str(val):
+            """Convert Excel cell values to clean strings.
+               Empty cells → ""
+               NaN → ""
+               datetime → formatted date
+               everything else → stripped string
+            """
+            # None or empty
+            if val is None:
+                return ""
+
+            # Pandas NA
+            try:
+                if pd.isna(val):
+                    return ""
+            except Exception:
+                pass
+
+            # Excel nan float
+            if isinstance(val, float) and str(val) == "nan":
+                return ""
+
+            # Datetime → format
+            if isinstance(val, datetime):
+                return val.strftime("%B %d, %Y")
+
+            # Strings → strip
+            if isinstance(val, str):
+                return val.strip()
+
+            # Numbers
+            if isinstance(val, (int, float)):
+                return str(val)
+
+            # Fallback
+            try:
+                return str(val).strip()
+            except Exception:
+                return ""
+
+        # ------------------- ORIGINAL CODE BELOW -------------------
+
         documents = []
         for file in os.listdir(self.folder):
             file_path = os.path.join(self.folder, file)
@@ -49,40 +92,35 @@ class VectorDBManager:
             if file_path.endswith(".xlsx") and not file.startswith("~$"):
                 xls = pd.ExcelFile(file_path)
                 for sheet_name in xls.sheet_names:
-                    # Read the sheet and convert headers to lowercase
                     df = pd.read_excel(xls, sheet_name=sheet_name)
                     df.columns = df.columns.str.lower()
-                    
-                    # --- CRITICAL FIX: Replace all NaN values with EMPTY STRING ("") ---
                     df = df.fillna('')
 
-                    # Force critical columns to string type
                     for col in self.EXCEL_HEADERS.keys():
-                         if col in df.columns:
+                        if col in df.columns:
                             df[col] = df[col].astype(str)
-                    
+
                     for index, row in df.iterrows():
-                        # Create full text content for embedding
                         row_text = ", ".join([str(x) for x in row.tolist()])
 
-                        # --- MAPPING: Extract and strip critical fields, defaulting to "" ---
-                        day_raw = row.get("days", "").strip()
-                        date = row.get("dates", "").strip()
-                        location = row.get("venue", "").strip()
-                        
-                        title = row.get("event name", "").strip()
-                        time_str = row.get("times", "").strip()
-                        contribution = row.get("cost/contribution", "").strip()
-                        
-                        contact_info = row.get("contact person/unit", "").strip()
-                        phone_number = row.get("contact phone/whatsapp", "").strip() 
-                        category = row.get("category", "").strip() # <-- ADDED
-                        
-                        # Handle poster_url separately: None is better than "" if it's blank
-                        poster_url_raw = row.get("website/link", "").strip()
+                        # ---- FIXED: all values now pass through cell_to_str ----
+                        day_raw = cell_to_str(row.get("days", ""))
+                        date = cell_to_str(row.get("dates", ""))
+                        location = cell_to_str(row.get("venue", ""))
+
+                        title = cell_to_str(row.get("event name", ""))
+                        time_str = cell_to_str(row.get("times", ""))
+                        contribution = cell_to_str(row.get("cost/contribution", ""))
+
+                        contact_info = cell_to_str(row.get("contact person/unit", ""))
+                        phone_number = cell_to_str(row.get("contact phone/whatsapp", ""))
+                        category = cell_to_str(row.get("category", ""))
+
+                        poster_url_raw = cell_to_str(row.get("website/link", ""))
                         poster_url = poster_url_raw if poster_url_raw else None
-                        
-                        # Logic to expand multi-day cells (e.g., '["Monday", "Tuesday"]')
+                        # ---------------------------------------------------------
+
+                        # Multi-day handling
                         if day_raw.startswith("[") and day_raw.endswith("]"):
                             try:
                                 day_list = ast.literal_eval(day_raw)
@@ -93,10 +131,7 @@ class VectorDBManager:
                         else:
                             day_list = [d.strip() for d in day_raw.split(",") if d.strip()] or [""]
 
-                        # Create one Document per day
                         for single_day in day_list:
-                            
-                            # Final metadata cleanup: ensure empty strings are used for missing values
                             final_day = single_day if single_day else ""
                             final_date = date if date else ""
                             final_location = location if location else ""
@@ -108,7 +143,6 @@ class VectorDBManager:
                                     metadata={
                                         "source": source_file,
                                         "sheet": sheet_name,
-                                        # --- AGENT METADATA KEYS ---
                                         "day": final_day,
                                         "date": final_date,
                                         "location": final_location,
@@ -116,10 +150,9 @@ class VectorDBManager:
                                         "time": time_str if time_str else "",
                                         "contribution": contribution if contribution else "",
                                         "contact": contact_info,
-                                        "poster_url": poster_url, 
+                                        "poster_url": poster_url,
                                         "phone": phone_number,
-                                        "category": category if category else "", # <-- ADDED
-                                        # --- END AGENT METADATA KEYS ---
+                                        "category": category if category else "",
                                     },
                                 )
                             )
@@ -134,7 +167,7 @@ class VectorDBManager:
                         "day": "", "date": "", "location": "",
                         "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": "",
-                        "category": "" # <-- ADDED
+                        "category": ""
                     })
                     documents.append(doc)
 
@@ -147,7 +180,7 @@ class VectorDBManager:
                         "day": "", "date": "", "location": "",
                         "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": "",
-                        "category": "" # <-- ADDED
+                        "category": ""
                     })
                     documents.append(doc)
 
@@ -165,7 +198,7 @@ class VectorDBManager:
                 print("Force refresh enabled - recreating vector database (Slow Path)...")
                 shutil.rmtree(self.db_name, ignore_errors=True)
             else:
-                 print("Creating new vector database (Slow Path)...")
+                print("Creating new vector database (Slow Path)...")
 
             documents = self.load_documents()
 
