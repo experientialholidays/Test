@@ -209,7 +209,6 @@ if __name__ == "__main__":
             lambda: "", None, msg
         )
 
-        clear.click(lambda: [], None, chatbot)
 
     logger.info("App started with OpenAI Agents SDK - Real Streaming Enabled")
     
