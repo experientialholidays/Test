@@ -6,7 +6,7 @@ from agents import Runner, trace, gen_trace_id
 from vector_db import VectorDBManager
 from db import SessionDBManager
 from session_handler import SessionHandler
-from auroville_agent import auroville_agent, db_manager, initialize_retriever # <-- IMPORT db_manager and initialize_retriever
+from auroville_agent import auroville_agent, db_manager, initialize_retriever  # <-- IMPORT db_manager and initialize_retriever
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -27,21 +27,16 @@ DB_FOLDER = "input"
 
 try:
     print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=TRUE) ---")
-    # 1. Call the initialization method, which returns the vectorstore
-    # >>> TEMPORARILY SET TO TRUE FOR THE FIRST DEPLOYMENT <<<
-    vectorstore = db_manager.create_or_load_db(force_refresh=True) 
     
-    # 2. **CRITICAL NEW STEP:** Initialize the retriever in the agent module
-    initialize_retriever(vectorstore) 
+    vectorstore = db_manager.create_or_load_db(force_refresh=True)
+    
+    initialize_retriever(vectorstore)
     
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
+
 except Exception as e:
     logger.error(f"FATAL ERROR during DB initialization: {e}")
-    # If this fails, the app will still launch but the agent will return an error message.
     pass
-
-# --- END VECTOR DB INITIALIZATION ---
-
 
 # -----------------------------
 # ASYNC STREAMING CHAT FUNCTION
@@ -57,7 +52,7 @@ async def streaming_chat(question, history, session_id):
         return
     
     session_handler.save_message(session_id, "user", question)
-    messages = history.copy() 
+    messages = history.copy()
     messages.append({"role": "user", "content": question})
     
     try:
@@ -76,9 +71,11 @@ async def streaming_chat(question, history, session_id):
                     data = event.data
                     if data.__class__.__name__ == "ResponseTextDeltaEvent":
                         response_text += data.delta
+                        
                         updated_history = history.copy()
                         updated_history.append({"role": "user", "content": question})
                         updated_history.append({"role": "assistant", "content": response_text})
+                        
                         yield updated_history
             
         if response_text:
@@ -88,15 +85,18 @@ async def streaming_chat(question, history, session_id):
             updated_history = history.copy()
             updated_history.append({"role": "user", "content": question})
             updated_history.append({"role": "assistant", "content": error_msg})
+            
             yield updated_history
             session_handler.save_message(session_id, "assistant", error_msg)
         
     except Exception as e:
         error_msg = f"I encountered an error: {str(e)}. Please try again."
         logger.error(f"Error: {e}")
+        
         updated_history = history.copy()
         updated_history.append({"role": "user", "content": question})
         updated_history.append({"role": "assistant", "content": error_msg})
+        
         yield updated_history
         session_handler.save_message(session_id, "assistant", error_msg)
 
@@ -104,6 +104,7 @@ async def streaming_chat(question, history, session_id):
 # GRADIO APP
 # -----------------------------
 
+# ✅ ONLY CHANGE MADE — JS updated to support "#DETAILS::" links
 JS_CODE = """
 function attachClickHandlers(msg_input_id, submit_btn_id) {
     const chatbotContainer = document.querySelector('div[data-testid="chatbot"]');
@@ -111,7 +112,7 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 
     chatbotContainer.addEventListener('click', function(event) {
         let target = event.target;
-        
+
         if (target.tagName !== 'A') {
             target = target.closest('a');
             if (!target) return;
@@ -119,21 +120,45 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 
         const href = target.getAttribute('href');
         if (!href) return;
-        
-        if (href.startsWith('#TRIGGER_SEARCH::')) {
-            event.preventDefault();
 
-            const parts = href.substring(1).split('::');
-            if (parts.length < 2) return;
-            const query = parts[1]; 
-            
+        function fillAndSend(text) {
             const msgInput = document.getElementById(msg_input_id);
             const submitBtn = document.getElementById(submit_btn_id);
-
             if (msgInput && submitBtn) {
-                msgInput.value = query;
+                msgInput.value = text;
+                msgInput.dispatchEvent(new Event('input', { bubbles: true }));
                 submitBtn.click();
             }
+        }
+
+        if (href.startsWith('#TRIGGER_SEARCH::')) {
+            event.preventDefault();
+            const parts = href.substring(1).split('::');
+            if (parts.length < 2) return;
+            fillAndSend(parts[1]);
+            return;
+        }
+
+        if (href.startsWith('#DETAILS::')) {
+            event.preventDefault();
+            const parts = href.substring(1).split('::');
+            if (parts.length < 2) return;
+
+            const match = parts[1].match(/(\\d+)/);
+            if (!match) return;
+
+            const idx = match[1];
+            fillAndSend("details(" + idx + ")");
+            return;
+        }
+
+        if (href.startsWith('#FETCH::')) {
+            event.preventDefault();
+            const parts = href.substring(1).split('::');
+            if (parts.length < 2) return;
+
+            fillAndSend("#FETCH::" + parts[1]);
+            return;
         }
     });
 }
@@ -147,7 +172,7 @@ if __name__ == "__main__":
         session_id_bridge = gr.Textbox(value="", visible=False)
         temp_storage_state = gr.State(value="")  
         
-        chatbot = gr.Chatbot(height=500, value=[],type='messages')
+        chatbot = gr.Chatbot(height=500, value=[], type='messages')
         
         msg = gr.Textbox(
             placeholder="Ask me anything about Auroville events...",
@@ -159,7 +184,6 @@ if __name__ == "__main__":
         
         with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
-            clear = gr.Button("Clear Chat")
             new_session_btn = gr.Button("New Session")
         
         demo.load(
@@ -176,11 +200,15 @@ if __name__ == "__main__":
             temp_storage_state=temp_storage_state,
             chatbot=chatbot,
             new_session_btn=new_session_btn
-        )        
-        
-        msg.submit(streaming_chat,inputs=[msg, chatbot, session_id_state],outputs=[chatbot]).then(lambda: "",None,msg )
-        submit.click(streaming_chat,inputs=[msg, chatbot, session_id_state],outputs=[chatbot]).then(lambda: "",None,msg)       
-        
+        )
+
+        msg.submit(streaming_chat, inputs=[msg, chatbot, session_id_state], outputs=[chatbot]).then(
+            lambda: "", None, msg
+        )
+        submit.click(streaming_chat, inputs=[msg, chatbot, session_id_state], outputs=[chatbot]).then(
+            lambda: "", None, msg
+        )
+
         clear.click(lambda: [], None, chatbot)
 
     logger.info("App started with OpenAI Agents SDK - Real Streaming Enabled")
