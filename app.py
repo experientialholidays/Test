@@ -26,7 +26,7 @@ DB_FOLDER = "input"
 
 try:
     print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=TRUE) ---")
-    vectorstore = db_manager.create_or_load_db(force_refresh=True)
+    vectorstore = db_manager.create_or_load_db(force_refresh= false)
     initialize_retriever(vectorstore)
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
 except Exception as e:
