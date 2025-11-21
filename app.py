@@ -26,7 +26,7 @@ DB_FOLDER = "input"
 
 try:
     print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=TRUE) ---")
-    vectorstore = db_manager.create_or_load_db(force_refresh= false)
+    vectorstore = db_manager.create_or_load_db(force_refresh=false)
     initialize_retriever(vectorstore)
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
 except Exception as e:
@@ -165,7 +165,8 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 
 if __name__ == "__main__":
 
-    with gr.Blocks(js=JS_CODE) as demo:
+    with gr.Blocks() as demo:
+    gr.HTML(f"<script>{JS_CODE}</script>")
 
         gr.Markdown("# 🤖 Auroville Events Chatbot")
 
