@@ -104,63 +104,70 @@ async def streaming_chat(question, history, session_id):
 # GRADIO APP
 # -----------------------------
 
-# ✅ ONLY CHANGE MADE — JS updated to support "#DETAILS::" links
+# Robust JS for click handling — listens on document and delegates
 JS_CODE = """
 function attachClickHandlers(msg_input_id, submit_btn_id) {
-    const chatbotContainer = document.querySelector('div[data-testid="chatbot"]');
-    if (!chatbotContainer) return;
-
-    chatbotContainer.addEventListener('click', function(event) {
-        let target = event.target;
-
-        if (target.tagName !== 'A') {
-            target = target.closest('a');
-            if (!target) return;
+    function fillAndSend(text) {
+        const msgInput = document.getElementById(msg_input_id);
+        const submitBtn = document.getElementById(submit_btn_id);
+        if (msgInput && submitBtn) {
+            msgInput.value = text;
+            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+            submitBtn.click();
+        } else {
+            console.warn("Message input or submit button not found:", msg_input_id, submit_btn_id);
         }
+    }
 
-        const href = target.getAttribute('href');
+    // Use a single delegated listener on document so elements moving in the DOM won't break handling.
+    document.addEventListener('click', function(event) {
+        // Find nearest anchor
+        const anchor = event.target.closest && event.target.closest('a[href^="#DETAILS::"], a[href^="#SHOWDAILY::"], a[href^="#FETCH::"]');
+        if (!anchor) return;
+
+        const href = anchor.getAttribute('href');
         if (!href) return;
 
-        function fillAndSend(text) {
-            const msgInput = document.getElementById(msg_input_id);
-            const submitBtn = document.getElementById(submit_btn_id);
-            if (msgInput && submitBtn) {
-                msgInput.value = text;
-                msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-                submitBtn.click();
-            }
-        }
+        // Prevent the default navigation behavior
+        event.preventDefault();
+        event.stopPropagation();
 
-        if (href.startsWith('#TRIGGER_SEARCH::')) {
-            event.preventDefault();
-            const parts = href.substring(1).split('::');
-            if (parts.length < 2) return;
-            fillAndSend(parts[1]);
-            return;
-        }
-
+        // DETAILS handler: "#DETAILS::123"
         if (href.startsWith('#DETAILS::')) {
-            event.preventDefault();
             const parts = href.substring(1).split('::');
-            if (parts.length < 2) return;
-
-            const match = parts[1].match(/(\\d+)/);
-            if (!match) return;
-
-            const idx = match[1];
-            fillAndSend("details(" + idx + ")");
+            if (parts.length >= 2) {
+                const match = parts[1].match(/(\\d+)/);
+                if (match) {
+                    const idx = match[1];
+                    fillAndSend("details(" + idx + ")");
+                }
+            }
             return;
         }
 
+        // SHOW DAILY handler: "#SHOWDAILY::YES" or "#SHOWDAILY::NO"
+        if (href.startsWith('#SHOWDAILY::')) {
+            const parts = href.substring(1).split('::');
+            if (parts.length >= 2) {
+                const choice = parts[1];
+                if (choice === "YES") {
+                    fillAndSend("show daily events");
+                } else if (choice === "NO") {
+                    fillAndSend("no");
+                }
+            }
+            return;
+        }
+
+        // FETCH handler: "#FETCH::something" -> send as-is
         if (href.startsWith('#FETCH::')) {
-            event.preventDefault();
             const parts = href.substring(1).split('::');
-            if (parts.length < 2) return;
-
-            fillAndSend("#FETCH::" + parts[1]);
+            if (parts.length >= 2) {
+                fillAndSend("#FETCH::" + parts[1]);
+            }
             return;
         }
-    });
+    }, true);
 }
 """
 
@@ -186,6 +193,7 @@ if __name__ == "__main__":
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
         
+        # Attach the handlers after load
         demo.load(
             None,
             None,
