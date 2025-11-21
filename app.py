@@ -6,7 +6,7 @@ from agents import Runner, trace, gen_trace_id
 from vector_db import VectorDBManager
 from db import SessionDBManager
 from session_handler import SessionHandler
-from auroville_agent import auroville_agent, db_manager, initialize_retriever  # <-- IMPORT db_manager and initialize_retriever
+from auroville_agent import auroville_agent, db_manager, initialize_retriever
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -23,28 +23,21 @@ session_handler = SessionHandler(session_db_manager=session_db_manager)
 # --- VECTOR DB INITIALIZATION ---
 VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
-# db_manager is imported from auroville_agent.py
 
 try:
     print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=TRUE) ---")
-    
     vectorstore = db_manager.create_or_load_db(force_refresh=True)
-    
     initialize_retriever(vectorstore)
-    
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
-
 except Exception as e:
     logger.error(f"FATAL ERROR during DB initialization: {e}")
     pass
 
-# -----------------------------
+# ----------------------------------------------------------
 # ASYNC STREAMING CHAT FUNCTION
-# -----------------------------
+# ----------------------------------------------------------
+
 async def streaming_chat(question, history, session_id):
-    """
-    Handle streaming chat using OpenAI Agents SDK with real streaming.
-    """
     logger.info(f'Processing chat for session: {session_id}')
     
     if not session_id or session_id == "null":
@@ -57,7 +50,11 @@ async def streaming_chat(question, history, session_id):
     
     try:
         response_text = ""
-        clean_message = [{"role": m["role"], "content": m["content"]} for m in messages if "role" in m and "content" in m]
+        clean_message = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if "role" in m and "content" in m
+        ]
 
         trace_id = gen_trace_id()
         with trace("Auroville chatbot", trace_id=trace_id):
@@ -66,8 +63,7 @@ async def streaming_chat(question, history, session_id):
             result = Runner.run_streamed(auroville_agent, clean_message)
             
             async for event in result.stream_events():
-                event_type_name = type(event).__name__
-                if event_type_name == "RawResponsesStreamEvent":
+                if type(event).__name__ == "RawResponsesStreamEvent":
                     data = event.data
                     if data.__class__.__name__ == "ResponseTextDeltaEvent":
                         response_text += data.delta
@@ -85,7 +81,6 @@ async def streaming_chat(question, history, session_id):
             updated_history = history.copy()
             updated_history.append({"role": "user", "content": question})
             updated_history.append({"role": "assistant", "content": error_msg})
-            
             yield updated_history
             session_handler.save_message(session_id, "assistant", error_msg)
         
@@ -100,87 +95,86 @@ async def streaming_chat(question, history, session_id):
         yield updated_history
         session_handler.save_message(session_id, "assistant", error_msg)
 
-# -----------------------------
-# GRADIO APP
-# -----------------------------
+# ----------------------------------------------------------
+# UPDATED JS — supports DETAILS, SHOWDAILY YES/NO
+# ----------------------------------------------------------
 
-# Robust JS for click handling — listens on document and delegates
 JS_CODE = """
 function attachClickHandlers(msg_input_id, submit_btn_id) {
+
     function fillAndSend(text) {
         const msgInput = document.getElementById(msg_input_id);
         const submitBtn = document.getElementById(submit_btn_id);
+
         if (msgInput && submitBtn) {
             msgInput.value = text;
             msgInput.dispatchEvent(new Event('input', { bubbles: true }));
             submitBtn.click();
-        } else {
-            console.warn("Message input or submit button not found:", msg_input_id, submit_btn_id);
         }
     }
 
-    // Use a single delegated listener on document so elements moving in the DOM won't break handling.
     document.addEventListener('click', function(event) {
-        // Find nearest anchor
-        const anchor = event.target.closest && event.target.closest('a[href^="#DETAILS::"], a[href^="#SHOWDAILY::"], a[href^="#FETCH::"]');
+
+        const anchor = event.target.closest &&
+            event.target.closest('a[href^="#DETAILS::"], a[href^="#SHOWDAILY::"], a[href^="#FETCH::"]');
+
         if (!anchor) return;
 
         const href = anchor.getAttribute('href');
         if (!href) return;
 
-        // Prevent the default navigation behavior
         event.preventDefault();
         event.stopPropagation();
 
-        // DETAILS handler: "#DETAILS::123"
-        if (href.startsWith('#DETAILS::')) {
-            const parts = href.substring(1).split('::');
-            if (parts.length >= 2) {
-                const match = parts[1].match(/(\\d+)/);
-                if (match) {
-                    const idx = match[1];
-                    fillAndSend("details(" + idx + ")");
-                }
+        // DETAILS
+        if (href.startsWith("#DETAILS::")) {
+            const parts = href.substring(1).split("::");
+            const match = parts[1].match(/(\\d+)/);
+            if (match) {
+                fillAndSend("details(" + match[1] + ")");
             }
             return;
         }
 
-        // SHOW DAILY handler: "#SHOWDAILY::YES" or "#SHOWDAILY::NO"
-        if (href.startsWith('#SHOWDAILY::')) {
-            const parts = href.substring(1).split('::');
-            if (parts.length >= 2) {
-                const choice = parts[1];
-                if (choice === "YES") {
-                    fillAndSend("show daily events");
-                } else if (choice === "NO") {
-                    fillAndSend("no");
-                }
+        // SHOW DAILY EVENTS
+        if (href.startsWith("#SHOWDAILY::")) {
+            const parts = href.substring(1).split("::");
+            const choice = parts[1];
+
+            if (choice === "YES") {
+                fillAndSend("show daily events");
+            } else if (choice === "NO") {
+                fillAndSend("no");
             }
             return;
         }
 
-        // FETCH handler: "#FETCH::something" -> send as-is
-        if (href.startsWith('#FETCH::')) {
-            const parts = href.substring(1).split('::');
-            if (parts.length >= 2) {
-                fillAndSend("#FETCH::" + parts[1]);
-            }
+        // FETCH
+        if (href.startsWith("#FETCH::")) {
+            const parts = href.substring(1).split("::");
+            fillAndSend("#FETCH::" + parts[1]);
             return;
         }
-    }, true);
+    });
 }
 """
 
+# ----------------------------------------------------------
+# GRADIO APP
+# ----------------------------------------------------------
+
 if __name__ == "__main__":
+
     with gr.Blocks(js=JS_CODE) as demo:
+
         gr.Markdown("# 🤖 Auroville Events Chatbot")
-        
-        session_id_state = gr.State(value="")
+
+        session_id_state = gr.State("")
         session_id_bridge = gr.Textbox(value="", visible=False)
-        temp_storage_state = gr.State(value="")  
-        
+        temp_storage_state = gr.State("")
+
         chatbot = gr.Chatbot(height=500, value=[], type='messages')
-        
+
         msg = gr.Textbox(
             placeholder="Ask me anything about Auroville events...",
             lines=1,
@@ -188,19 +182,18 @@ if __name__ == "__main__":
             show_label=False,
             elem_id="msg_input_field"
         )
-        
+
         with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
-        
-        # Attach the handlers after load
+
         demo.load(
             None,
             None,
             None,
-            js=f"() => {{ attachClickHandlers('msg_input_field', 'submit_button'); }}"
+            js="() => { attachClickHandlers('msg_input_field', 'submit_button'); }"
         )
-        
+
         session_handler.setup_session_handlers(
             demo=demo,
             session_id_state=session_id_state,
@@ -210,17 +203,26 @@ if __name__ == "__main__":
             new_session_btn=new_session_btn
         )
 
-        msg.submit(streaming_chat, inputs=[msg, chatbot, session_id_state], outputs=[chatbot]).then(
-            lambda: "", None, msg
-        )
-        submit.click(streaming_chat, inputs=[msg, chatbot, session_id_state], outputs=[chatbot]).then(
-            lambda: "", None, msg
-        )
+        msg.submit(
+            streaming_chat,
+            inputs=[msg, chatbot, session_id_state],
+            outputs=[chatbot]
+        ).then(lambda: "", None, msg)
 
+        submit.click(
+            streaming_chat,
+            inputs=[msg, chatbot, session_id_state],
+            outputs=[chatbot]
+        ).then(lambda: "", None, msg)
 
-    logger.info("App started with OpenAI Agents SDK - Real Streaming Enabled")
-    
+    logger.info("Auroville App Started with Updated Click Support")
+
     server_port = int(os.environ.get("PORT", 8080))
     server_host = "0.0.0.0"
-    
-    demo.launch(server_name=server_host, server_port=server_port, inbrowser=False, debug=False)
+
+    demo.launch(
+        server_name=server_host,
+        server_port=server_port,
+        inbrowser=False,
+        debug=False
+    )
