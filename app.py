@@ -25,13 +25,14 @@ VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
 
 try:
-    print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=TRUE) ---")
-    vectorstore = db_manager.create_or_load_db(force_refresh=false)
+    print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=FALSE) ---")
+    vectorstore = db_manager.create_or_load_db(force_refresh=False)
     initialize_retriever(vectorstore)
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
 except Exception as e:
     logger.error(f"FATAL ERROR during DB initialization: {e}")
     pass
+
 
 # ----------------------------------------------------------
 # ASYNC STREAMING CHAT FUNCTION
@@ -95,8 +96,9 @@ async def streaming_chat(question, history, session_id):
         yield updated_history
         session_handler.save_message(session_id, "assistant", error_msg)
 
+
 # ----------------------------------------------------------
-# UPDATED JS — supports DETAILS, SHOWDAILY YES/NO
+# UPDATED JS
 # ----------------------------------------------------------
 
 JS_CODE = """
@@ -159,6 +161,7 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 }
 """
 
+
 # ----------------------------------------------------------
 # GRADIO APP
 # ----------------------------------------------------------
@@ -166,23 +169,25 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 if __name__ == "__main__":
 
     with gr.Blocks() as demo:
-         gr.HTML(f"<script>{JS_CODE}</script>")
 
-         gr.Markdown("# 🤖 Auroville Events Chatbot")
+        # JS injection (correct indentation!)
+        gr.HTML(f"<script>{JS_CODE}</script>")
 
-         session_id_state = gr.State("")
-         session_id_bridge = gr.Textbox(value="", visible=False)
-         temp_storage_state = gr.State("")
+        gr.Markdown("# 🤖 Auroville Events Chatbot")
 
-         chatbot = gr.Chatbot(height=500, value=[], type='messages')
+        session_id_state = gr.State("")
+        session_id_bridge = gr.Textbox(value="", visible=False)
+        temp_storage_state = gr.State("")
 
-         msg = gr.Textbox(
+        chatbot = gr.Chatbot(height=500, value=[], type='messages')
+
+        msg = gr.Textbox(
             placeholder="Ask me anything about Auroville events...",
             lines=1,
             label="Message",
             show_label=False,
             elem_id="msg_input_field"
-         )
+        )
 
         with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
