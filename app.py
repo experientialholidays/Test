@@ -168,7 +168,7 @@ if __name__ == "__main__":
     with gr.Blocks() as demo:
          gr.HTML(f"<script>{JS_CODE}</script>")
 
-        gr.Markdown("# 🤖 Auroville Events Chatbot")
+         gr.Markdown("# 🤖 Auroville Events Chatbot")
 
         session_id_state = gr.State("")
         session_id_bridge = gr.Textbox(value="", visible=False)
