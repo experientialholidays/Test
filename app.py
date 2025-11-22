@@ -170,7 +170,7 @@ if __name__ == "__main__":
 
     with gr.Blocks() as demo:
 
-        # JS injection (correct indentation!)
+        # JS injection
         gr.HTML(f"<script>{JS_CODE}</script>")
 
         gr.Markdown("# 🤖 Auroville Events Chatbot")
@@ -179,7 +179,7 @@ if __name__ == "__main__":
         session_id_bridge = gr.Textbox(value="", visible=False)
         temp_storage_state = gr.State("")
 
-        chatbot = gr.Chatbot(height=500, value=[], type='messages')
+        chatbot = gr.Chatbot(height=500, value=[])
 
         msg = gr.Textbox(
             placeholder="Ask me anything about Auroville events...",
@@ -189,6 +189,7 @@ if __name__ == "__main__":
             elem_id="msg_input_field"
         )
 
+        # ✅ FIXED INDENTATION HERE
         with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
