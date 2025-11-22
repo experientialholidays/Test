@@ -170,8 +170,8 @@ if __name__ == "__main__":
 
     with gr.Blocks() as demo:
 
-        # JS injection
-        gr.HTML(f"<script>{JS_CODE}</script>")
+        # ✅ FIX APPLIED: JS now executes
+        gr.HTML(f"<script>{JS_CODE}</script>", sanitize=False)
 
         gr.Markdown("# 🤖 Auroville Events Chatbot")
 
@@ -189,7 +189,6 @@ if __name__ == "__main__":
             elem_id="msg_input_field"
         )
 
-        # ✅ FIXED INDENTATION HERE
         with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
