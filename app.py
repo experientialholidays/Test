@@ -166,7 +166,7 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 if __name__ == "__main__":
 
     with gr.Blocks() as demo:
-    gr.HTML(f"<script>{JS_CODE}</script>")
+         gr.HTML(f"<script>{JS_CODE}</script>")
 
         gr.Markdown("# 🤖 Auroville Events Chatbot")
 
