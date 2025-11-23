@@ -1,5 +1,5 @@
 # Core App
-gradio
+gradio==4.31.0
 python-dotenv
 
 # LangChain Core
