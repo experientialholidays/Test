@@ -171,7 +171,7 @@ if __name__ == "__main__":
     with gr.Blocks() as demo:
 
         # ✅ FIX APPLIED: JS now executes
-        gr.HTML(f"<script>{JS_CODE}</script>", sanitize=False)
+        gr.HTML(f"<script>{JS_CODE}</script>")
 
         gr.Markdown("# 🤖 Auroville Events Chatbot")
 
