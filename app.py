@@ -184,37 +184,37 @@ if __name__ == "__main__":
             elem_id="msg_input_field"
          )
 
-        with gr.Row():
+         with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
-        demo.load(
+         demo.load(
             None,
             None,
             None,
             js="() => { attachClickHandlers('msg_input_field', 'submit_button'); }"
-        )
+         )
 
-        session_handler.setup_session_handlers(
+         session_handler.setup_session_handlers(
             demo=demo,
             session_id_state=session_id_state,
             session_id_bridge=session_id_bridge,
             temp_storage_state=temp_storage_state,
             chatbot=chatbot,
             new_session_btn=new_session_btn
-        )
+         )
 
-        msg.submit(
+         msg.submit(
             streaming_chat,
             inputs=[msg, chatbot, session_id_state],
             outputs=[chatbot]
-        ).then(lambda: "", None, msg)
+         ).then(lambda: "", None, msg)
 
-        submit.click(
+         submit.click(
             streaming_chat,
             inputs=[msg, chatbot, session_id_state],
             outputs=[chatbot]
-        ).then(lambda: "", None, msg)
+         ).then(lambda: "", None, msg)
 
     logger.info("Auroville App Started with Updated Click Support")
 
