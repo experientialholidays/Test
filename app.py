@@ -174,7 +174,7 @@ if __name__ == "__main__":
          session_id_bridge = gr.Textbox(value="", visible=False)
          temp_storage_state = gr.State("")
 
-         chatbot = gr.Chatbot(height=500, value=[], type='messages')
+         chatbot = gr.Chatbot(height=500, value=[])
 
          msg = gr.Textbox(
             placeholder="Ask me anything about Auroville events...",
