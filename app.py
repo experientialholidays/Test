@@ -25,7 +25,6 @@ VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
 
 try:
-    print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=TRUE) ---")
     vectorstore = db_manager.create_or_load_db(force_refresh=false)
     initialize_retriever(vectorstore)
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
@@ -165,56 +164,55 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 
 if __name__ == "__main__":
 
-    with gr.Blocks() as demo:
-         gr.HTML(f"<script>{JS_CODE}</script>")
+    with gr.Blocks(js=JS_CODE) as demo:
 
-         gr.Markdown("# 🤖 Auroville Events Chatbot")
+        gr.Markdown("# 🤖 Auroville Events Chatbot")
 
-         session_id_state = gr.State("")
-         session_id_bridge = gr.Textbox(value="", visible=False)
-         temp_storage_state = gr.State("")
+        session_id_state = gr.State("")
+        session_id_bridge = gr.Textbox(value="", visible=False)
+        temp_storage_state = gr.State("")
 
-         chatbot = gr.Chatbot(height=500, value=[])
+        chatbot = gr.Chatbot(height=500, value=[], type='messages')
 
-         msg = gr.Textbox(
+        msg = gr.Textbox(
             placeholder="Ask me anything about Auroville events...",
             lines=1,
             label="Message",
             show_label=False,
             elem_id="msg_input_field"
-         )
+        )
 
-         with gr.Row():
+        with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
-         demo.load(
+        demo.load(
             None,
             None,
             None,
             js="() => { attachClickHandlers('msg_input_field', 'submit_button'); }"
-         )
+        )
 
-         session_handler.setup_session_handlers(
+        session_handler.setup_session_handlers(
             demo=demo,
             session_id_state=session_id_state,
             session_id_bridge=session_id_bridge,
             temp_storage_state=temp_storage_state,
             chatbot=chatbot,
             new_session_btn=new_session_btn
-         )
+        )
 
-         msg.submit(
+        msg.submit(
             streaming_chat,
             inputs=[msg, chatbot, session_id_state],
             outputs=[chatbot]
-         ).then(lambda: "", None, msg)
+        ).then(lambda: "", None, msg)
 
-         submit.click(
+        submit.click(
             streaming_chat,
             inputs=[msg, chatbot, session_id_state],
             outputs=[chatbot]
-         ).then(lambda: "", None, msg)
+        ).then(lambda: "", None, msg)
 
     logger.info("Auroville App Started with Updated Click Support")
 
@@ -226,4 +224,4 @@ if __name__ == "__main__":
         server_port=server_port,
         inbrowser=False,
         debug=False
-)
+    )
