@@ -1,5 +1,6 @@
 # Core App
 gradio==4.31.0
+huggingface_hub==0.23.0
 python-dotenv
 
 # LangChain Core
