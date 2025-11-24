@@ -1,3 +1,4 @@
+# auroville_agent.py
 import os
 import logging
 import urllib.parse
@@ -84,7 +85,7 @@ def parse_time_for_sort(raw: str) -> time:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# NOTE: EVENT_DATA_STORE keys are integers (summary numbering)
+# Map numeric index -> Document (cache shown results)
 EVENT_DATA_STORE: Dict[int, Document] = {}
 
 VECTOR_DB_NAME = "vector_db"
@@ -104,6 +105,7 @@ def initialize_retriever(vectorstore):
     else:
         logger.error("Retriever init failed: Vectorstore is None.")
 
+# Initialize DB & retriever eagerly (same as original file)
 vectorstore = db_manager.create_or_load_db()
 initialize_retriever(vectorstore)
 
@@ -163,7 +165,7 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     return "\n".join(out)
 
 # -------------------------------------------------------------------------
-# Clickable summary formatting (numbered)
+# Clickable, numbered summary formatting (no FETCH links)
 # -------------------------------------------------------------------------
 
 def format_summary_numbered(index: int, meta: Dict) -> str:
@@ -183,9 +185,10 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
         parts.append(f"| Ph:{''.join(filter(str.isdigit, phone))}")
 
     line = " ".join(parts)
+    # numbered line plus a plain anchor that the frontend converts into a code or click
     return (
         f"{index}. **{title}** — {line}\n"
-        f"   👉 <a href='#DETAILS::{index}'>View details</a>"
+        f"   👉 ` {index} `  — click or type the number to fetch details"
     )
 
 # -------------------------------------------------------------------------
@@ -197,6 +200,7 @@ def get_daily_events(start_number: int) -> str:
     """
     Returns ALL Daily Events using metadata filtering only.
     Category = 'Daily Events'
+    Numbering continues from start_number (so caller can append)
     """
     global EVENT_DATA_STORE, vectorstore
 
@@ -230,6 +234,11 @@ def get_daily_events(start_number: int) -> str:
         out.append(format_summary_numbered(idx, d.metadata))
 
     return "\n".join(out)
+
+# -------------------------------------------------------------------------
+# UPDATED search_auroville_events()
+# (keeps previous behavior; removed any mention of FETCH links)
+# -------------------------------------------------------------------------
 
 @function_tool
 def search_auroville_events(
@@ -295,9 +304,9 @@ def search_auroville_events(
 
     for doc in docs:
         title = doc.metadata.get('title')
-        date_str = doc.metadata.get('date', '').strip()
-        day_val = doc.metadata.get('day', '').strip()
-        time_str = doc.metadata.get('time', '').strip()
+        date_str = str(doc.metadata.get('date', '')).strip()
+        day_val = str(doc.metadata.get('day', '')).strip()
+        time_str = str(doc.metadata.get('time', '')).strip()
 
         key = (title, date_str, day_val)
         if key in seen:
@@ -395,7 +404,7 @@ def search_auroville_events(
     return "\n".join(out)
 
 # -------------------------------------------------------------------------
-# get_event_details (unchanged)
+# get_event_details (unchanged behavior — returns cached card)
 # -------------------------------------------------------------------------
 
 @function_tool
@@ -407,7 +416,7 @@ def get_event_details(identifier: str) -> str:
 
     ident = str(identifier).strip()
 
-    m = re.match(r'details(\d+)', ident)
+    m = re.match(r'details\((\d+)\)', ident)
     if m:
         num = int(m.group(1))
     elif ident.isdigit():
@@ -422,26 +431,57 @@ def get_event_details(identifier: str) -> str:
     return f"{num}. {format_event_card(doc.metadata, doc.page_content)}"
 
 # -------------------------------------------------------------------------
-# 4. Agent Instructions — Cleaned & focused
+# 4. Agent Instructions — Revised and minimal (no FETCH mention)
 # -------------------------------------------------------------------------
 
 INSTRUCTIONS = f"""
-You are an **AI Event Information Extractor** for Auroville events.
+You are an AI Event Information Extractor for Auroville.
 
 Today's date is {datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")}.
-
 Set temperature to 0.1.
 
-**High-level division of responsibility (IMPORTANT)**
-1) The frontend/app code will **handle direct UI interactions**:
-   * If the user clicks a numbered "View details" link (or types an integer like "3", or `details(3)`), the app will call `get_event_details` directly and return the cached event card. **Do not call the vector DB for those.**
-   * If the user clicks "Yes" for daily events (or sends exactly "show daily events"), the app will call `get_daily_events(start_number=<last index>)` directly and return those results. **Do not call the vector DB for those.**
+Primary responsibilities:
+- Answer general user queries about events (e.g., "events tomorrow", "what's on 24 November").
+  For these queries, call the selector and the search tool workflows:
+    1) Use `vectordb_query_selector_agent` to refine the user's query when appropriate.
+    2) Call `search_auroville_events` with the refined query and the appropriate specificity.
+    3) Present the exact returned tool output to the user after fixing minor grammar or removing accidental duplicate lines. 
+       **Do not modify the numbered summary tokens** generated by the tool (they are used by the frontend/caller to fetch details).
 
-2) The LLM (you) is responsible for normal natural-language queries like:
-   * "What's on this weekend?"
-   * "Events tomorrow"
-   * "Sound healing in Auroville"
-   For these, first call `vectordb_query_selector_agent` to refine the query and then call `search_auroville_events` with the refined query.
+Special rules (enforced by the application code or frontend):
+- If the user's input is a plain integer (e.g., `4`) or matches `details(NUM)` (e.g., `details(4)`), do NOT perform a new vector DB search. 
+  Instead, the application code (frontend/server) will call the tool `get_event_details` directly and return its output; the LLM should not attempt to re-route or re-run searches for those requests.
+- If the user requests "show daily events" (or clicks the daily events confirmation), the application code will call `get_daily_events(start_number)` directly and return its output; the LLM should not invoke the selector or search for this step.
+- In other words: clicking/view-details or show-daily is handled by the application logic; the assistant need not decide routing for these events.
 
-**Strict rules for the assistant:**
-* If an input is a plain integer (e.g., "4") or matches `details(NUM)` (e.g., `details(4)`), you MUST NOT perform any search or call selector. The app has already routed such inputs to `get
+Display rules:
+- Numbered entries in results must remain exactly as produced by the search tool; the assistant may only correct grammar outside those numbered entries.
+- When returning details from `get_event_details`, do not perform any additional search or re-ranking — return the cached event card as-is.
+- Do not hallucinate missing metadata — omit missing fields.
+- Keep event categories: Date-specific Events, Weekly Events, Daily Events.
+
+Workflow exception:
+- If the user's question is exactly "daily and appointment-based events", the application will call:
+    search_auroville_events(search_query="daily and appointment-based events", specificity="Broad")
+  (this is handled by the application; the assistant may supply the search term but should not override the app's routing.)
+
+Always follow the rules above.
+"""
+
+# -------------------------------------------------------------------------
+# Tools & Agent setup (no FETCH tool included)
+# -------------------------------------------------------------------------
+
+tools = [
+    vectordb_query_selector_agent.as_tool("vectordb_query_selector_agent", "Refines query."),
+    search_auroville_events,
+    get_daily_events,
+    get_event_details
+]
+
+auroville_agent = Agent(
+    name="Auroville Events Assistant",
+    instructions=INSTRUCTIONS,
+    model=gemini_model,
+    tools=tools
+    )
