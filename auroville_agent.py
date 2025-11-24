@@ -84,6 +84,7 @@ def parse_time_for_sort(raw: str) -> time:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# NOTE: EVENT_DATA_STORE keys are integers (summary numbering)
 EVENT_DATA_STORE: Dict[int, Document] = {}
 
 VECTOR_DB_NAME = "vector_db"
@@ -162,7 +163,7 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     return "\n".join(out)
 
 # -------------------------------------------------------------------------
-# Clickable summary formatting
+# Clickable summary formatting (numbered)
 # -------------------------------------------------------------------------
 
 def format_summary_numbered(index: int, meta: Dict) -> str:
@@ -229,11 +230,6 @@ def get_daily_events(start_number: int) -> str:
         out.append(format_summary_numbered(idx, d.metadata))
 
     return "\n".join(out)
-
-# -------------------------------------------------------------------------
-# UPDATED search_auroville_events()
-# Only required changes made
-# -------------------------------------------------------------------------
 
 @function_tool
 def search_auroville_events(
@@ -411,7 +407,7 @@ def get_event_details(identifier: str) -> str:
 
     ident = str(identifier).strip()
 
-    m = re.match(r'details\((\d+)\)', ident)
+    m = re.match(r'details(\d+)', ident)
     if m:
         num = int(m.group(1))
     elif ident.isdigit():
@@ -426,7 +422,7 @@ def get_event_details(identifier: str) -> str:
     return f"{num}. {format_event_card(doc.metadata, doc.page_content)}"
 
 # -------------------------------------------------------------------------
-# 4. Agent Instructions — Original + Minimal Daily-Event Rules
+# 4. Agent Instructions — Cleaned & focused
 # -------------------------------------------------------------------------
 
 INSTRUCTIONS = f"""
@@ -436,54 +432,16 @@ Today's date is {datetime.now().strftime("%A, %B %d, %Y, %I:%M %p")}.
 
 Set temperature to 0.1.
 
-Workflow & Rules:
-1) Normal user queries (e.g., "events tomorrow") -> First call `vectordb_query_selector_agent` (to refine) then call `search_auroville_events` with the refined query. Present the **exact** returned tool output to the user (after minor grammar fixes), but **do NOT change or remove** the numbered code blocks shown in the summary.
+**High-level division of responsibility (IMPORTANT)**
+1) The frontend/app code will **handle direct UI interactions**:
+   * If the user clicks a numbered "View details" link (or types an integer like "3", or `details(3)`), the app will call `get_event_details` directly and return the cached event card. **Do not call the vector DB for those.**
+   * If the user clicks "Yes" for daily events (or sends exactly "show daily events"), the app will call `get_daily_events(start_number=<last index>)` directly and return those results. **Do not call the vector DB for those.**
 
-2) If the user's message is a plain integer (e.g., "4") OR matches `details(NUM)` (e.g., `details(4)`), you MUST NOT call the vector DB or the selector. Instead, CALL the tool `get_event_details` with that identifier and return its output.
+2) The LLM (you) is responsible for normal natural-language queries like:
+   * "What's on this weekend?"
+   * "Events tomorrow"
+   * "Sound healing in Auroville"
+   For these, first call `vectordb_query_selector_agent` to refine the query and then call `search_auroville_events` with the refined query.
 
-3) The summary output uses numbered entries. The assistant must instruct users they can click the inline code (e.g., `3`) and press Enter to fetch details. The assistant should not modify or remove these inline code tokens.
-
-4) The assistant MAY fix small grammar issues in plain text outside the numbered code blocks, and may remove accidental duplicate textual lines, but MUST NOT alter or rewrite the numbered entries or their code blocks.
-
-5) Never convert or rewrite the numbered code blocks into URLs or other formats. Do not create other link types. The frontend (Gradio) copies code blocks into the input field when clicked — rely on that behavior.
-
-6) When returning details from `get_event_details`, do not perform any additional search or re-ranking — return the cached event card.
-
-7) If an invalid index is given, return a short, helpful message like: "I could not find an event numbered 99 in the latest results."
-
-8) Do not hallucinate missing metadata — if a field is missing, omit it from the display.
-
-9) Keep categories as: Date-specific Events, Weekly Events, Daily Events.
-
-10) If the user's question is exactly "daily and appointment-based events", skip the selector and call `search_auroville_events` with:
-   search_query="daily and appointment-based events", specificity="Broad".
-
-11) **Daily Events Logic (NEW)**
-   - In broad searches, do NOT show daily events initially.
-   - At the end of a broad search, ALWAYS show:
-        "There are Daily Events also happening every day."
-        with clickable:
-            👉 <a href='#SHOWDAILY::YES'>Yes</a>
-            👉 <a href='#SHOWDAILY::NO'>No</a>
-   - If the user clicks or types "show daily events", call:
-        get_daily_events(start_number=<last index>)
-   - get_daily_events() MUST use metadata filtering ONLY.
-   - In specific searches, daily events must appear normally if they match the topic.
-   - Numbering must continue from the previous list.
-
-Always follow these rules.
-"""
-
-tools = [
-    vectordb_query_selector_agent.as_tool("vectordb_query_selector_agent", "Refines query."),
-    search_auroville_events,
-    get_daily_events,
-    get_event_details
-]
-
-auroville_agent = Agent(
-    name="Auroville Events Assistant",
-    instructions=INSTRUCTIONS,
-    model=gemini_model,
-    tools=tools
-)
+**Strict rules for the assistant:**
+* If an input is a plain integer (e.g., "4") or matches `details(NUM)` (e.g., `details(4)`), you MUST NOT perform any search or call selector. The app has already routed such inputs to `get
