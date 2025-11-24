@@ -6,8 +6,12 @@ from agents import Runner, trace, gen_trace_id
 from vector_db import VectorDBManager
 from db import SessionDBManager
 from session_handler import SessionHandler
-from auroville_agent import auroville_agent, db_manager, initialize_retriever
+
+# NEW: import the two direct-call functions and cache store from the agent module
+from auroville_agent import auroville_agent, db_manager, initialize_retriever, get_event_details, get_daily_events, EVENT_DATA_STORE
+
 import logging
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,8 +29,8 @@ VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
 
 try:
-    # NOTE: Assuming 'false' in original code was a typo for 'False'
-    vectorstore = db_manager.create_or_load_db(force_refresh=False) 
+    print("--- STARTING VECTOR DB INITIALIZATION (FORCE REFRESH=FALSE) ---")
+    vectorstore = db_manager.create_or_load_db(force_refresh=False)
     initialize_retriever(vectorstore)
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
 except Exception as e:
@@ -34,20 +38,95 @@ except Exception as e:
     pass
 
 # ----------------------------------------------------------
-# ASYNC STREAMING CHAT FUNCTION
+# Helper: parse direct commands
+# ----------------------------------------------------------
+DETAILS_RE = re.compile(r'^\s*details\(\s*(\d+)\s*\)\s*$', re.IGNORECASE)
+DIGITS_RE = re.compile(r'^\s*(\d+)\s*$')
+SHOW_DAILY_ALIASES = {
+    "show daily events",
+    "show daily event",
+    "show daily",
+    "show daily events please",
+    "show daily events, please",
+    "show daily events yes",
+    "show daily events y",
+}
+
+# ----------------------------------------------------------
+# ASYNC STREAMING CHAT FUNCTION (with routing override)
 # ----------------------------------------------------------
 
 async def streaming_chat(question, history, session_id):
-    logger.info(f'Processing chat for session: {session_id}')
-    
+    """
+    This function now performs quick routing for *direct* commands:
+    - numeric input (e.g., "4")  => call get_event_details(...) from cache, return result (no LLM)
+    - details(N)                => call get_event_details(...)
+    - "show daily events" (exact phrase used by JS) => call get_daily_events(...)
+    Otherwise falls back to the normal LLM Runner.run_streamed(auroville_agent, ...)
+    """
+
+    logger.info(f'Processing chat for session: {session_id} | question: {question!r}')
     if not session_id or session_id == "null":
         logger.info("ERROR: No valid session_id!")
         return
-    
+
+    # Trim and normalize
+    q_raw = question or ""
+    q = q_raw.strip()
+
+    # 1) Direct details(...) pattern
+    m = DETAILS_RE.match(q)
+    if m:
+        idx = int(m.group(1))
+        logger.info(f"Routing to get_event_details for id={idx} (direct details() input).")
+        result = get_event_details(f"details({idx})")
+        # Save to session and return a one-shot response
+        session_handler.save_message(session_id, "user", question)
+        session_handler.save_message(session_id, "assistant", result)
+        updated_history = history.copy()
+        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "assistant", "content": result})
+        yield updated_history
+        return
+
+    # 2) Plain integer e.g., "4"
+    m2 = DIGITS_RE.match(q)
+    if m2:
+        idx = int(m2.group(1))
+        logger.info(f"Routing to get_event_details for id={idx} (plain integer input).")
+        result = get_event_details(str(idx))
+        session_handler.save_message(session_id, "user", question)
+        session_handler.save_message(session_id, "assistant", result)
+        updated_history = history.copy()
+        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "assistant", "content": result})
+        yield updated_history
+        return
+
+    # 3) Show daily events (exact phrases used by the JS)
+    # The JS in the UI sends exactly "show daily events" when user clicks Yes,
+    # so we match that (case-insensitive).
+    if q.lower() in SHOW_DAILY_ALIASES:
+        # Determine start index for daily events numbering (length of existing cache)
+        try:
+            last_index = max(EVENT_DATA_STORE.keys()) if EVENT_DATA_STORE else 0
+        except Exception:
+            last_index = 0
+        logger.info(f"Routing to get_daily_events(start_number={last_index}).")
+        result = get_daily_events(start_number=last_index)
+        session_handler.save_message(session_id, "user", question)
+        session_handler.save_message(session_id, "assistant", result)
+        updated_history = history.copy()
+        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "assistant", "content": result})
+        yield updated_history
+        return
+
+    # 4) Otherwise — fall back to LLM-driven flow (streaming)
     session_handler.save_message(session_id, "user", question)
     messages = history.copy()
     messages.append({"role": "user", "content": question})
-    
+
     try:
         response_text = ""
         clean_message = [
@@ -59,21 +138,21 @@ async def streaming_chat(question, history, session_id):
         trace_id = gen_trace_id()
         with trace("Auroville chatbot", trace_id=trace_id):
             logger.info(f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}")
-            
+
             result = Runner.run_streamed(auroville_agent, clean_message)
-            
+
             async for event in result.stream_events():
                 if type(event).__name__ == "RawResponsesStreamEvent":
                     data = event.data
                     if data.__class__.__name__ == "ResponseTextDeltaEvent":
                         response_text += data.delta
-                        
+
                         updated_history = history.copy()
                         updated_history.append({"role": "user", "content": question})
                         updated_history.append({"role": "assistant", "content": response_text})
-                        
+
                         yield updated_history
-            
+
         if response_text:
             session_handler.save_message(session_id, "assistant", response_text)
         else:
@@ -83,20 +162,22 @@ async def streaming_chat(question, history, session_id):
             updated_history.append({"role": "assistant", "content": error_msg})
             yield updated_history
             session_handler.save_message(session_id, "assistant", error_msg)
-        
+
     except Exception as e:
         error_msg = f"I encountered an error: {str(e)}. Please try again."
         logger.error(f"Error: {e}")
-        
+
         updated_history = history.copy()
         updated_history.append({"role": "user", "content": question})
         updated_history.append({"role": "assistant", "content": error_msg})
-        
+
         yield updated_history
         session_handler.save_message(session_id, "assistant", error_msg)
 
+
 # ----------------------------------------------------------
 # UPDATED JS — supports DETAILS, SHOWDAILY YES/NO
+# (No changes from your last JS block — kept as-is)
 # ----------------------------------------------------------
 
 JS_CODE = """
@@ -149,12 +230,8 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
             return;
         }
 
-        // FETCH
-        if (href.startsWith("#FETCH::")) {
-            const parts = href.substring(1).split("::");
-            fillAndSend("#FETCH::" + parts[1]);
-            return;
-        }
+        // NOTE: FETCH handlers removed from backend responsibility; JS no longer needs to call FETCH,
+        // but the anchor is left harmlessly in links if generated elsewhere.
     });
 }
 """
@@ -165,7 +242,6 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 
 if __name__ == "__main__":
 
-    # FIX: Removed the invalid 'js=JS_CODE' argument from gr.Blocks()
     with gr.Blocks() as demo:
 
          gr.Markdown("# 🤖 Auroville Events Chatbot")
@@ -188,7 +264,6 @@ if __name__ == "__main__":
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
-         # FIX: Modified demo.load to embed the full JS_CODE and then call the function
          demo.load(
              None,
              None,
