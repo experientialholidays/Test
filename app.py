@@ -188,34 +188,34 @@ if __name__ == "__main__":
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
-        # FIX: Modified demo.load to embed the full JS_CODE and then call the function
-        demo.load(
-            None,
-            None,
-            None,
-            js=f"() => {{ {JS_CODE} attachClickHandlers('msg_input_field', 'submit_button'); }}"
-        )
+         # FIX: Modified demo.load to embed the full JS_CODE and then call the function
+         demo.load(
+             None,
+             None,
+             None,
+             js=f"() => {{ {JS_CODE} attachClickHandlers('msg_input_field', 'submit_button'); }}"
+         )
 
-        session_handler.setup_session_handlers(
-            demo=demo,
-            session_id_state=session_id_state,
-            session_id_bridge=session_id_bridge,
-            temp_storage_state=temp_storage_state,
-            chatbot=chatbot,
-            new_session_btn=new_session_btn
-        )
+         session_handler.setup_session_handlers(
+             demo=demo,
+             session_id_state=session_id_state,
+             session_id_bridge=session_id_bridge,
+             temp_storage_state=temp_storage_state,
+             chatbot=chatbot,
+             new_session_btn=new_session_btn
+         )
 
-        msg.submit(
-            streaming_chat,
-            inputs=[msg, chatbot, session_id_state],
-            outputs=[chatbot]
-        ).then(lambda: "", None, msg)
+         msg.submit(
+             streaming_chat,
+             inputs=[msg, chatbot, session_id_state],
+             outputs=[chatbot]
+         ).then(lambda: "", None, msg)
 
-        submit.click(
-            streaming_chat,
-            inputs=[msg, chatbot, session_id_state],
-            outputs=[chatbot]
-        ).then(lambda: "", None, msg)
+         submit.click(
+             streaming_chat,
+             inputs=[msg, chatbot, session_id_state],
+             outputs=[chatbot]
+         ).then(lambda: "", None, msg)
 
     logger.info("Auroville App Started with Updated Click Support")
 
