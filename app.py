@@ -168,23 +168,23 @@ if __name__ == "__main__":
     # FIX: Removed the invalid 'js=JS_CODE' argument from gr.Blocks()
     with gr.Blocks() as demo:
 
-        gr.Markdown("# 🤖 Auroville Events Chatbot")
+         gr.Markdown("# 🤖 Auroville Events Chatbot")
 
-        session_id_state = gr.State("")
-        session_id_bridge = gr.Textbox(value="", visible=False)
-        temp_storage_state = gr.State("")
+         session_id_state = gr.State("")
+         session_id_bridge = gr.Textbox(value="", visible=False)
+         temp_storage_state = gr.State("")
 
-        chatbot = gr.Chatbot(height=500, value=[], type='messages')
+         chatbot = gr.Chatbot(height=500, value=[],)
 
-        msg = gr.Textbox(
+         msg = gr.Textbox(
             placeholder="Ask me anything about Auroville events...",
             lines=1,
             label="Message",
             show_label=False,
             elem_id="msg_input_field"
-        )
+         )
 
-        with gr.Row():
+         with gr.Row():
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
