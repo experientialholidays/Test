@@ -25,7 +25,8 @@ VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
 
 try:
-    vectorstore = db_manager.create_or_load_db(force_refresh=false)
+    # NOTE: Assuming 'false' in original code was a typo for 'False'
+    vectorstore = db_manager.create_or_load_db(force_refresh=False) 
     initialize_retriever(vectorstore)
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
 except Exception as e:
@@ -164,7 +165,8 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
 
 if __name__ == "__main__":
 
-    with gr.Blocks(js=JS_CODE) as demo:
+    # FIX: Removed the invalid 'js=JS_CODE' argument from gr.Blocks()
+    with gr.Blocks() as demo:
 
         gr.Markdown("# 🤖 Auroville Events Chatbot")
 
@@ -186,11 +188,12 @@ if __name__ == "__main__":
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
+        # FIX: Modified demo.load to embed the full JS_CODE and then call the function
         demo.load(
             None,
             None,
             None,
-            js="() => { attachClickHandlers('msg_input_field', 'submit_button'); }"
+            js=f"() => {{ {JS_CODE} attachClickHandlers('msg_input_field', 'submit_button'); }}"
         )
 
         session_handler.setup_session_handlers(
