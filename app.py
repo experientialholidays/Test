@@ -204,29 +204,45 @@ function attachClickHandlers(msg_input_id, submit_btn_id) {
         const href = anchor.getAttribute('href');
         if (!href) return;
 
-        event.preventDefault();
-        event.stopPropagation();
-
+        
         // DETAILS
         if (href.startsWith("#DETAILS::")) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            event.stopPropagation();
+
             const parts = href.substring(1).split("::");
-            const match = parts[1].match(/(\\d+)/);
+            const match = parts[1].match(/(\d+)/);
             if (match) {
-                fillAndSend("details(" + match[1] + ")");
+            const msgInput = document.getElementById(msg_input_id);
+            msgInput.value = "details(" + match[1] + ")";
+            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+            setTimeout(() => submitBtn.click(), 30);
             }
             return;
         }
 
         // SHOW DAILY EVENTS
         if (href.startsWith("#SHOWDAILY::")) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            event.stopPropagation();
+
             const parts = href.substring(1).split("::");
             const choice = parts[1];
 
+            const msgInput = document.getElementById(msg_input_id);
+
             if (choice === "YES") {
-                fillAndSend("show daily events");
+            msgInput.value = "show daily events";
             } else if (choice === "NO") {
-                fillAndSend("no");
+                msgInput.value = "no";
             }
+            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+            setTimeout(() => submitBtn.click(), 30);
+
             return;
         }
 
