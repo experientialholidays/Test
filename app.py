@@ -7,8 +7,7 @@ from vector_db import VectorDBManager
 from db import SessionDBManager
 from session_handler import SessionHandler
 
-# FIX: Import the original function names. We will call them using the .func attribute 
-# in streaming_chat to access the original callable function, bypassing the tool wrapper.
+# Import the tool objects by their original names
 from auroville_agent import (
     auroville_agent, 
     db_manager, 
@@ -67,7 +66,7 @@ SHOW_DAILY_ALIASES = {
 async def streaming_chat(question, history, session_id):
     """
     This function now performs quick routing for *direct* commands:
-    FIXED: Uses FUNCTION_NAME.func(...) to unwrap the FunctionTool object.
+    FIXED: Uses FUNCTION_NAME._function(...) to unwrap the FunctionTool object.
     """
 
     # --- INPUT SANITIZATION FIX ---
@@ -88,8 +87,8 @@ async def streaming_chat(question, history, session_id):
     if m:
         idx = int(m.group(1))
         logger.info(f"Routing to get_event_details for id={idx} (direct details() input).")
-        # DEFINITIVE FIX: Access the callable function using .func
-        result = get_event_details.func(f"details({idx})")
+        # DEFINITIVE FIX: Access the callable function using ._function
+        result = get_event_details._function(f"details({idx})")
         # Save to session and return a one-shot response
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
@@ -104,8 +103,8 @@ async def streaming_chat(question, history, session_id):
     if m2:
         idx = int(m2.group(1))
         logger.info(f"Routing to get_event_details for id={idx} (plain integer input).")
-        # DEFINITIVE FIX: Access the callable function using .func
-        result = get_event_details.func(str(idx))
+        # DEFINITIVE FIX: Access the callable function using ._function
+        result = get_event_details._function(str(idx))
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
@@ -122,8 +121,8 @@ async def streaming_chat(question, history, session_id):
         except Exception:
             last_index = 0
         logger.info(f"Routing to get_daily_events(start_number={last_index}).")
-        # DEFINITIVE FIX: Access the callable function using .func
-        result = get_daily_events.func(start_number=last_index)
+        # DEFINITIVE FIX: Access the callable function using ._function
+        result = get_daily_events._function(start_number=last_index)
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
