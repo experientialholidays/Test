@@ -134,7 +134,7 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
     line = " ".join(parts)
     return (
         f"{index}. **{title}** — {line}\n"
-        f"   👉 <a href='#DETAILS::{index}'>View details</a>"
+        f"   👉 <a href='#DETAILS::{index}'>View details **({index})**</a>"
     )
 
 # -------------------------------------------------------------------------
