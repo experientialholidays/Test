@@ -59,20 +59,20 @@ SHOW_DAILY_ALIASES = {
 async def streaming_chat(question, history, session_id):
     """
     This function now performs quick routing for *direct* commands:
-    - numeric input (e.g., "4")  => call get_event_details(...) from cache, return result (no LLM)
-    - details(N)                => call get_event_details(...)
-    - "show daily events" (exact phrase used by JS) => call get_daily_events(...)
-    Otherwise falls back to the normal LLM Runner.run_streamed(auroville_agent, ...)
     """
 
-    logger.info(f'Processing chat for session: {session_id} | question: {question!r}')
+    # --- INPUT SANITIZATION FIX ---
+    if isinstance(question, dict):
+        q_raw = question.get('text', "")
+    else:
+        q_raw = question or ""
+    
+    q = q_raw.strip()
+
+    logger.info(f'Processing chat for session: {session_id} | question: {q!r}')
     if not session_id or session_id == "null":
         logger.info("ERROR: No valid session_id!")
         return
-
-    # Trim and normalize
-    q_raw = question or ""
-    q = q_raw.strip()
 
     # 1) Direct details(...) pattern
     m = DETAILS_RE.match(q)
@@ -81,10 +81,10 @@ async def streaming_chat(question, history, session_id):
         logger.info(f"Routing to get_event_details for id={idx} (direct details() input).")
         result = get_event_details(f"details({idx})")
         # Save to session and return a one-shot response
-        session_handler.save_message(session_id, "user", question)
+        session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "user", "content": q})
         updated_history.append({"role": "assistant", "content": result})
         yield updated_history
         return
@@ -95,17 +95,15 @@ async def streaming_chat(question, history, session_id):
         idx = int(m2.group(1))
         logger.info(f"Routing to get_event_details for id={idx} (plain integer input).")
         result = get_event_details(str(idx))
-        session_handler.save_message(session_id, "user", question)
+        session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "user", "content": q})
         updated_history.append({"role": "assistant", "content": result})
         yield updated_history
         return
 
     # 3) Show daily events (exact phrases used by the JS)
-    # The JS in the UI sends exactly "show daily events" when user clicks Yes,
-    # so we match that (case-insensitive).
     if q.lower() in SHOW_DAILY_ALIASES:
         # Determine start index for daily events numbering (length of existing cache)
         try:
@@ -114,18 +112,18 @@ async def streaming_chat(question, history, session_id):
             last_index = 0
         logger.info(f"Routing to get_daily_events(start_number={last_index}).")
         result = get_daily_events(start_number=last_index)
-        session_handler.save_message(session_id, "user", question)
+        session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "user", "content": q})
         updated_history.append({"role": "assistant", "content": result})
         yield updated_history
         return
 
     # 4) Otherwise — fall back to LLM-driven flow (streaming)
-    session_handler.save_message(session_id, "user", question)
+    session_handler.save_message(session_id, "user", q)
     messages = history.copy()
-    messages.append({"role": "user", "content": question})
+    messages.append({"role": "user", "content": q})
 
     try:
         response_text = ""
@@ -137,7 +135,7 @@ async def streaming_chat(question, history, session_id):
 
         trace_id = gen_trace_id()
         with trace("Auroville chatbot", trace_id=trace_id):
-            logger.info(f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}")
+            logger.info(f"View trace: [https://platform.openai.com/traces/trace?trace_id=](https://platform.openai.com/traces/trace?trace_id=){trace_id}")
 
             result = Runner.run_streamed(auroville_agent, clean_message)
 
@@ -148,7 +146,7 @@ async def streaming_chat(question, history, session_id):
                         response_text += data.delta
 
                         updated_history = history.copy()
-                        updated_history.append({"role": "user", "content": question})
+                        updated_history.append({"role": "user", "content": q})
                         updated_history.append({"role": "assistant", "content": response_text})
 
                         yield updated_history
@@ -158,7 +156,7 @@ async def streaming_chat(question, history, session_id):
         else:
             error_msg = "I apologize, but I couldn't generate a proper response. Please try again."
             updated_history = history.copy()
-            updated_history.append({"role": "user", "content": question})
+            updated_history.append({"role": "user", "content": q})
             updated_history.append({"role": "assistant", "content": error_msg})
             yield updated_history
             session_handler.save_message(session_id, "assistant", error_msg)
@@ -168,7 +166,7 @@ async def streaming_chat(question, history, session_id):
         logger.error(f"Error: {e}")
 
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": question})
+        updated_history.append({"role": "user", "content": q})
         updated_history.append({"role": "assistant", "content": error_msg})
 
         yield updated_history
@@ -176,78 +174,72 @@ async def streaming_chat(question, history, session_id):
 
 
 # ----------------------------------------------------------
-# UPDATED JS — supports DETAILS, SHOWDAILY YES/NO
-# (No changes from your last JS block — kept as-is)
+# UPDATED JS - FIXES CLICK HANDLERS AND BLANK MESSAGE ISSUE
 # ----------------------------------------------------------
 
 JS_CODE = """
 function attachClickHandlers(msg_input_id, submit_btn_id) {
 
-    function fillAndSend(text) {
-        const msgInput = document.getElementById(msg_input_id);
-        const submitBtn = document.getElementById(submit_btn_id);
-
-        if (msgInput && submitBtn) {
-            msgInput.value = text;
-            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-            submitBtn.click();
-        }
-    }
-
     document.addEventListener('click', function(event) {
-
+        
         const anchor = event.target.closest &&
-            event.target.closest('a[href^="#DETAILS::"], a[href^="#SHOWDAILY::"], a[href^="#FETCH::"]');
+            event.target.closest('a[href^="#DETAILS::"], a[href^="#SHOWDAILY::"]');
 
         if (!anchor) return;
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        event.stopPropagation();
 
         const href = anchor.getAttribute('href');
         if (!href) return;
 
+        const submitBtn = document.getElementById(submit_btn_id);
         
-        // DETAILS
-        if (href.startsWith("#DETAILS::")) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            event.stopPropagation();
+        // Use querySelector to find the textarea inside the container.
+        const inputContainer = document.getElementById(msg_input_id);
+        const msgInput = inputContainer ? inputContainer.querySelector('textarea') : null;
 
-            const parts = href.substring(1).split("::");
-            const match = parts[1].match(/(\d+)/);
-            if (match) {
-            const msgInput = document.getElementById(msg_input_id);
-            msgInput.value = "details(" + match[1] + ")";
-            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-
-            setTimeout(() => submitBtn.click(), 30);
-            }
+        if (!msgInput || !submitBtn) {
+            console.error("Gradio elements not found.");
             return;
         }
 
-        // SHOW DAILY EVENTS
-        if (href.startsWith("#SHOWDAILY::")) {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            event.stopPropagation();
+        let textToSend = "";
 
+        // --- DETAILS ---
+        if (href.startsWith("#DETAILS::")) {
+            const parts = href.substring(1).split("::");
+            const match = parts[1].match(/(\\d+)/);
+            if (match) {
+                textToSend = "details(" + match[1] + ")";
+            }
+        }
+
+        // --- SHOW DAILY ---
+        else if (href.startsWith("#SHOWDAILY::")) {
             const parts = href.substring(1).split("::");
             const choice = parts[1];
-
-            const msgInput = document.getElementById(msg_input_id);
-
             if (choice === "YES") {
-            msgInput.value = "show daily events";
+                textToSend = "show daily events";
             } else if (choice === "NO") {
-                msgInput.value = "no";
+                textToSend = "no";
             }
-            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
-
-            setTimeout(() => submitBtn.click(), 30);
-
-            return;
         }
 
-        // NOTE: FETCH handlers removed from backend responsibility; JS no longer needs to call FETCH,
-        // but the anchor is left harmlessly in links if generated elsewhere.
+        // 4. Fill and Submit
+        if (textToSend) {
+            // 1. Set the value
+            msgInput.value = textToSend;
+            
+            // 2. Dispatch the input event to tell Gradio/React the value changed
+            msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // 3. Click Submit (Increased delay from 30ms to 200ms for stability)
+            setTimeout(() => {
+                submitBtn.click();
+            }, 200); // Wait 200ms to ensure the state has been registered
+        }
     });
 }
 """
@@ -308,7 +300,7 @@ if __name__ == "__main__":
              outputs=[chatbot]
          ).then(lambda: "", None, msg)
 
-    logger.info("Auroville App Started with Updated Click Support")
+    logger.info("Auroville App Started with Fixed Click & Input Handlers")
 
     server_port = int(os.environ.get("PORT", 8080))
     server_host = "0.0.0.0"
