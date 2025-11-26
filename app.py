@@ -7,14 +7,14 @@ from vector_db import VectorDBManager
 from db import SessionDBManager
 from session_handler import SessionHandler
 
-# NEW FIX: Import the functions using aliases (fetch_...) to avoid a conflict
-# with non-callable FunctionTool objects that might be named the same.
+# FIX: Import the original function names. We will call them using the .func attribute 
+# in streaming_chat to access the original callable function, bypassing the tool wrapper.
 from auroville_agent import (
     auroville_agent, 
     db_manager, 
     initialize_retriever, 
-    get_event_details as fetch_event_details, # Renamed for direct calling
-    get_daily_events as fetch_daily_events,   # Renamed for direct calling
+    get_event_details, 
+    get_daily_events, 
     EVENT_DATA_STORE
 )
 
@@ -67,7 +67,7 @@ SHOW_DAILY_ALIASES = {
 async def streaming_chat(question, history, session_id):
     """
     This function now performs quick routing for *direct* commands:
-    FIXED: Uses fetch_event_details and fetch_daily_events to avoid TypeError.
+    FIXED: Uses FUNCTION_NAME.func(...) to unwrap the FunctionTool object.
     """
 
     # --- INPUT SANITIZATION FIX ---
@@ -88,8 +88,8 @@ async def streaming_chat(question, history, session_id):
     if m:
         idx = int(m.group(1))
         logger.info(f"Routing to get_event_details for id={idx} (direct details() input).")
-        # FIXED CALL: Using the callable alias
-        result = fetch_event_details(f"details({idx})")
+        # DEFINITIVE FIX: Access the callable function using .func
+        result = get_event_details.func(f"details({idx})")
         # Save to session and return a one-shot response
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
@@ -104,8 +104,8 @@ async def streaming_chat(question, history, session_id):
     if m2:
         idx = int(m2.group(1))
         logger.info(f"Routing to get_event_details for id={idx} (plain integer input).")
-        # FIXED CALL: Using the callable alias
-        result = fetch_event_details(str(idx))
+        # DEFINITIVE FIX: Access the callable function using .func
+        result = get_event_details.func(str(idx))
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
@@ -122,8 +122,8 @@ async def streaming_chat(question, history, session_id):
         except Exception:
             last_index = 0
         logger.info(f"Routing to get_daily_events(start_number={last_index}).")
-        # FIXED CALL: Using the callable alias
-        result = fetch_daily_events(start_number=last_index)
+        # DEFINITIVE FIX: Access the callable function using .func
+        result = get_daily_events.func(start_number=last_index)
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
