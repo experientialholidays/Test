@@ -7,13 +7,15 @@ from vector_db import VectorDBManager
 from db import SessionDBManager
 from session_handler import SessionHandler
 
-# Import the tool objects by their original names
+# FINAL FIX: Import the functions using new aliases (direct_..._fn)
+# This ensures we get a clean, callable Python function reference for direct calls,
+# while the original names (get_event_details, etc.) remain as tool objects for the LLM.
 from auroville_agent import (
     auroville_agent, 
     db_manager, 
     initialize_retriever, 
-    get_event_details, 
-    get_daily_events, 
+    get_event_details as direct_event_details_fn, 
+    get_daily_events as direct_daily_events_fn, 
     EVENT_DATA_STORE
 )
 
@@ -65,11 +67,10 @@ SHOW_DAILY_ALIASES = {
 
 async def streaming_chat(question, history, session_id):
     """
-    This function now performs quick routing for *direct* commands:
-    FIXED: Uses FUNCTION_NAME.__wrapped__(...) to unwrap the FunctionTool object.
+    This function performs quick routing for *direct* commands and ensures input sanitization.
     """
 
-    # --- INPUT SANITIZATION FIX ---
+    # --- INPUT SANITIZATION FIX (Addressing the "Unknown content" error) ---
     if isinstance(question, dict):
         q_raw = question.get('text', "")
     else:
@@ -87,8 +88,8 @@ async def streaming_chat(question, history, session_id):
     if m:
         idx = int(m.group(1))
         logger.info(f"Routing to get_event_details for id={idx} (direct details() input).")
-        # DEFINITIVE FIX: Access the callable function using .__wrapped__
-        result = get_event_details.__wrapped__(f"details({idx})")
+        # Final Fix: Call the clean alias (direct_event_details_fn) directly
+        result = direct_event_details_fn(f"details({idx})")
         # Save to session and return a one-shot response
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
@@ -103,8 +104,8 @@ async def streaming_chat(question, history, session_id):
     if m2:
         idx = int(m2.group(1))
         logger.info(f"Routing to get_event_details for id={idx} (plain integer input).")
-        # DEFINITIVE FIX: Access the callable function using .__wrapped__
-        result = get_event_details.__wrapped__(str(idx))
+        # Final Fix: Call the clean alias (direct_event_details_fn) directly
+        result = direct_event_details_fn(str(idx))
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
@@ -121,8 +122,8 @@ async def streaming_chat(question, history, session_id):
         except Exception:
             last_index = 0
         logger.info(f"Routing to get_daily_events(start_number={last_index}).")
-        # DEFINITIVE FIX: Access the callable function using .__wrapped__
-        result = get_daily_events.__wrapped__(start_number=last_index)
+        # Final Fix: Call the clean alias (direct_daily_events_fn) directly
+        result = direct_daily_events_fn(start_number=last_index)
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
@@ -321,4 +322,5 @@ if __name__ == "__main__":
         server_port=server_port,
         inbrowser=False,
         debug=False
-    )
+        )
+    
