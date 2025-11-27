@@ -51,7 +51,7 @@ SHOW_DAILY_ALIASES = {
 }
 
 # ----------------------------------------------------------
-# HISTORY CONVERTER HELPER FUNCTION
+# HISTORY CONVERTER HELPER FUNCTION (Fix for LLM history bug)
 # ----------------------------------------------------------
 def history_to_agent_format(history, new_q):
     """Converts Gradio's history (list of lists/tuples) to the Agent's message format (list of dicts)."""
@@ -59,7 +59,6 @@ def history_to_agent_format(history, new_q):
     
     # history from Gradio is a list of [user_msg, assistant_msg] pairs
     for user_msg, assistant_msg in history:
-        # Filter out messages from the Gradio history that might be None or empty strings
         if user_msg:
             agent_messages.append({"role": "user", "content": str(user_msg)})
         if assistant_msg:
@@ -70,21 +69,6 @@ def history_to_agent_format(history, new_q):
         agent_messages.append({"role": "user", "content": str(new_q)})
         
     return agent_messages
-
-# ----------------------------------------------------------
-# SESSION INITIALIZATION FUNCTION (FOR PERSISTENCE)
-# ----------------------------------------------------------
-def initialize_session_on_load():
-    """Retrieves the last active session ID and history from the database."""
-    # NOTE: You MUST ensure your session_handler has a method like get_last_session_data
-    # This function provides the necessary outputs to populate the Gradio components on load.
-    
-    # Placeholder implementation (Replace with your actual SessionHandler logic)
-    last_session_id, history_list = session_handler.get_last_session_data() 
-    
-    # Outputs: session_id_state, session_id_bridge, chatbot
-    return last_session_id, last_session_id, history_list
-
 
 # ----------------------------------------------------------
 # CHAT FUNCTION
@@ -166,7 +150,7 @@ async def streaming_chat(question, history, session_id):
                 
                 delta = None
                 
-                # Case 1: The event object itself has the text delta (safe check with getattr)
+                # Case 1: The event object itself has the text delta 
                 if hasattr(event, 'response_text_delta'):
                     delta = getattr(event, 'response_text_delta', None)
                 
@@ -252,12 +236,13 @@ if __name__ == "__main__":
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
-         # --- MODIFIED LOAD LINE FOR PERSISTENCE ---
+         # --- MODIFIED LOAD LINE FOR PERSISTENCE (FIXED) ---
+         # This uses the existing and correct method from SessionHandler
          demo.load(
-             initialize_session_on_load, 
-             None, 
-             [session_id_state, session_id_bridge, chatbot], 
-             js=f"() => {{ {JS_CODE} attachClickHandlers('msg_input_field', 'submit_button'); }}"
+             session_handler._initialize_session_with_dummy, 
+             inputs=None, 
+             outputs=[session_id_state, session_id_bridge, chatbot], 
+             js=session_handler.get_localStorage_reader_js()
          )
          # --- END MODIFIED LOAD LINE ---
          
