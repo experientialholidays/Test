@@ -110,7 +110,7 @@ async def streaming_chat(question, history, session_id):
         yield updated_history
         return
 
-    # 3. LLM Flow (Updated with robust stream processing)
+    # 3. LLM Flow (Updated with re-corrected stream processing)
     session_handler.save_message(session_id, "user", q)
     messages = history.copy()
     messages.append({"role": "user", "content": q})
@@ -126,21 +126,31 @@ async def streaming_chat(question, history, session_id):
         with trace("Auroville chatbot", trace_id=trace_id):
             result = Runner.run_streamed(auroville_agent, clean_message)
             
-            # --- START OF UPDATED STREAM LOGIC ---
+            # --- START OF RE-CORRECTED STREAM LOGIC ---
             async for event in result.stream_events():
                 
-                # Use .get() for safer access to the text delta
-                text_delta = event.get('response_text_delta')
+                delta = None
                 
-                if text_delta:
-                    response_text += text_delta
+                # Case 1: The event object itself has the text delta (safe check with getattr)
+                if hasattr(event, 'response_text_delta'):
+                    delta = getattr(event, 'response_text_delta', None)
+                
+                # Case 2: The event follows the original nested structure
+                elif type(event).__name__ == "RawResponsesStreamEvent":
+                    data = getattr(event, 'data', None)
+                    if data and data.__class__.__name__ == "ResponseTextDeltaEvent":
+                        delta = getattr(data, 'delta', None)
+                        
+                # Check if we successfully extracted a text delta
+                if delta:
+                    response_text += delta
                     
                     # Update and yield history to display the stream
                     updated_history = history.copy()
                     updated_history.append({"role": "user", "content": q})
                     updated_history.append({"role": "assistant", "content": response_text})
                     yield updated_history
-            # --- END OF UPDATED STREAM LOGIC ---
+            # --- END OF RE-CORRECTED STREAM LOGIC ---
 
         if response_text:
             session_handler.save_message(session_id, "assistant", response_text)
