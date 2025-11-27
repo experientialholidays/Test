@@ -51,11 +51,47 @@ SHOW_DAILY_ALIASES = {
 }
 
 # ----------------------------------------------------------
+# HISTORY CONVERTER HELPER FUNCTION
+# ----------------------------------------------------------
+def history_to_agent_format(history, new_q):
+    """Converts Gradio's history (list of lists/tuples) to the Agent's message format (list of dicts)."""
+    agent_messages = []
+    
+    # history from Gradio is a list of [user_msg, assistant_msg] pairs
+    for user_msg, assistant_msg in history:
+        # Filter out messages from the Gradio history that might be None or empty strings
+        if user_msg:
+            agent_messages.append({"role": "user", "content": str(user_msg)})
+        if assistant_msg:
+            agent_messages.append({"role": "assistant", "content": str(assistant_msg)})
+
+    # Add the current user question
+    if new_q:
+        agent_messages.append({"role": "user", "content": str(new_q)})
+        
+    return agent_messages
+
+# ----------------------------------------------------------
+# SESSION INITIALIZATION FUNCTION (FOR PERSISTENCE)
+# ----------------------------------------------------------
+def initialize_session_on_load():
+    """Retrieves the last active session ID and history from the database."""
+    # NOTE: You MUST ensure your session_handler has a method like get_last_session_data
+    # This function provides the necessary outputs to populate the Gradio components on load.
+    
+    # Placeholder implementation (Replace with your actual SessionHandler logic)
+    last_session_id, history_list = session_handler.get_last_session_data() 
+    
+    # Outputs: session_id_state, session_id_bridge, chatbot
+    return last_session_id, last_session_id, history_list
+
+
+# ----------------------------------------------------------
 # CHAT FUNCTION
 # ----------------------------------------------------------
 async def streaming_chat(question, history, session_id):
     
-    # 1. Sanitization (Fixes your "Unknown content" error)
+    # 1. Sanitization 
     if isinstance(question, dict):
         q_raw = question.get('text', "")
     else:
@@ -76,8 +112,7 @@ async def streaming_chat(question, history, session_id):
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": q})
-        updated_history.append({"role": "assistant", "content": result})
+        updated_history.append([q, result]) 
         yield updated_history
         return
 
@@ -90,8 +125,7 @@ async def streaming_chat(question, history, session_id):
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": q})
-        updated_history.append({"role": "assistant", "content": result})
+        updated_history.append([q, result])
         yield updated_history
         return
 
@@ -105,28 +139,29 @@ async def streaming_chat(question, history, session_id):
         session_handler.save_message(session_id, "user", q)
         session_handler.save_message(session_id, "assistant", result)
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": q})
-        updated_history.append({"role": "assistant", "content": result})
+        updated_history.append([q, result])
         yield updated_history
         return
 
-    # 3. LLM Flow (Updated with re-corrected stream processing)
+    # 3. LLM Flow (Updated with history conversion and robust stream processing)
     session_handler.save_message(session_id, "user", q)
-    messages = history.copy()
-    messages.append({"role": "user", "content": q})
 
     try:
         response_text = ""
-        clean_message = [
-            {"role": m["role"], "content": m["content"]}
-            for m in messages if "role" in m and "content" in m
-        ]
+        
+        # --- CRITICAL FIX: CONVERT GRADIO HISTORY TO AGENT FORMAT ---
+        clean_message = history_to_agent_format(history, q)
+        # --- END CRITICAL FIX ---
         
         trace_id = gen_trace_id()
         with trace("Auroville chatbot", trace_id=trace_id):
             result = Runner.run_streamed(auroville_agent, clean_message)
             
-            # --- START OF RE-CORRECTED STREAM LOGIC ---
+            # Use the existing history as the base for the Gradio output
+            updated_history = history.copy()
+            updated_history.append([q, response_text]) # Pre-add the new entry
+
+            # Robust stream processing logic (as previously corrected)
             async for event in result.stream_events():
                 
                 delta = None
@@ -145,28 +180,22 @@ async def streaming_chat(question, history, session_id):
                 if delta:
                     response_text += delta
                     
-                    # Update and yield history to display the stream
-                    updated_history = history.copy()
-                    updated_history.append({"role": "user", "content": q})
-                    updated_history.append({"role": "assistant", "content": response_text})
+                    # Update the last entry in the Gradio history list
+                    updated_history[-1][1] = response_text
                     yield updated_history
-            # --- END OF RE-CORRECTED STREAM LOGIC ---
 
         if response_text:
             session_handler.save_message(session_id, "assistant", response_text)
         else:
             error_msg = "I couldn't generate a response."
-            updated_history = history.copy()
-            updated_history.append({"role": "user", "content": q})
-            updated_history.append({"role": "assistant", "content": error_msg})
+            updated_history[-1][1] = error_msg
             yield updated_history
             session_handler.save_message(session_id, "assistant", error_msg)
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         updated_history = history.copy()
-        updated_history.append({"role": "user", "content": q})
-        updated_history.append({"role": "assistant", "content": error_msg})
+        updated_history.append([q, error_msg])
         yield updated_history
         session_handler.save_message(session_id, "assistant", error_msg)
 
@@ -223,7 +252,15 @@ if __name__ == "__main__":
             submit = gr.Button("Send", variant="primary", elem_id="submit_button")
             new_session_btn = gr.Button("New Session")
 
-         demo.load(None, None, None, js=f"() => {{ {JS_CODE} attachClickHandlers('msg_input_field', 'submit_button'); }}")
+         # --- MODIFIED LOAD LINE FOR PERSISTENCE ---
+         demo.load(
+             initialize_session_on_load, 
+             None, 
+             [session_id_state, session_id_bridge, chatbot], 
+             js=f"() => {{ {JS_CODE} attachClickHandlers('msg_input_field', 'submit_button'); }}"
+         )
+         # --- END MODIFIED LOAD LINE ---
+         
          session_handler.setup_session_handlers(demo, session_id_state, session_id_bridge, temp_storage_state, chatbot, new_session_btn)
 
          msg.submit(streaming_chat, inputs=[msg, chatbot, session_id_state], outputs=[chatbot]).then(lambda: "", None, msg)
