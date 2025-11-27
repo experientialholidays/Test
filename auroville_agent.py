@@ -21,7 +21,7 @@ def is_date_specific(date_str, day_str):
     return bool(date_str and str(date_str).strip().lower() not in ('', 'n/a', 'upcoming', 'none'))
 
 # -------------------------------------------------------------------------
-# Robust Time Parser for Sorting (No changes)
+# Robust Time Parser for Sorting
 # -------------------------------------------------------------------------
 
 def parse_time_for_sort(raw: str) -> time:
@@ -79,7 +79,7 @@ def parse_time_for_sort(raw: str) -> time:
     return time(hour, minute)
 
 # -------------------------------------------------------------------------
-# 1. Setup & Global Cache (No changes)
+# 1. Setup & Global Cache
 # -------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO)
@@ -105,7 +105,7 @@ def initialize_retriever(vectorstore):
     else:
         logger.error("Retriever init failed: Vectorstore is None.")
 
-# Initialize DB & retriever eagerly (same as original file)
+# Initialize DB & retriever eagerly
 vectorstore = db_manager.create_or_load_db()
 initialize_retriever(vectorstore)
 
@@ -113,7 +113,7 @@ gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
 
 # -------------------------------------------------------------------------
-# 2. Formatting Helpers (format_event_card is unchanged)
+# 2. Formatting Helpers
 # -------------------------------------------------------------------------
 
 def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
@@ -165,11 +165,13 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     return "\n".join(out)
 
 # -------------------------------------------------------------------------
-# Clickable, numbered summary formatting (MODIFIED to include index)
+# Clickable, numbered summary formatting (UPDATED to include date)
 # -------------------------------------------------------------------------
 
 def format_summary_numbered(index: int, meta: Dict) -> str:
     title = meta.get('title', '').strip()
+    # Capture the date string
+    date_str = meta.get('date', '').strip() 
     day = meta.get('day', '').strip()
     time_str = meta.get('time', '').strip()
     loc = meta.get('location', '').strip()
@@ -177,7 +179,14 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
     phone = meta.get('phone', '').strip()
 
     parts = []
-    if day: parts.append(day)
+    
+    # Priority 1: Specific Date
+    if date_str and str(date_str).lower() not in ('', 'n/a', 'upcoming', 'none'):
+        parts.append(date_str)
+    # Priority 2: Day (for weekly events)
+    elif day:
+        parts.append(day)
+    
     if time_str: parts.append(time_str)
     if loc: parts.append(f"@{loc}")
     if contrib: parts.append(f"| Contrib: {contrib}")
@@ -185,7 +194,7 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
         parts.append(f"| Ph:{''.join(filter(str.isdigit, phone))}")
 
     line = " ".join(parts)
-    # MODIFICATION: Added the index number next to 'View details'
+    # Numbered line plus an anchor that the frontend converts into a code or click
     return (
         f"{index}. **{title}** — {line}\n"
         f"   👉 <a href='#DETAILS::{index}'>View details **({index})**</a>"
@@ -195,7 +204,7 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
 # 3. Tools (Refactored to Core/Wrapper)
 # -------------------------------------------------------------------------
 
-# --- (B) NEW CORE FUNCTION: get_daily_events_core ---
+# --- NEW CORE FUNCTION: get_daily_events_core (Callable by app.py) ---
 def get_daily_events_core(start_number: int) -> str:
     """Core logic for fetching daily events."""
     global EVENT_DATA_STORE, vectorstore
@@ -231,7 +240,7 @@ def get_daily_events_core(start_number: int) -> str:
 
     return "\n".join(out)
 
-# --- (A) MODIFIED TOOL: Calls the _core function ---
+# --- MODIFIED TOOL: Calls the _core function (Callable by Agent) ---
 @function_tool
 def get_daily_events(start_number: int) -> str:
     """
@@ -242,7 +251,7 @@ def get_daily_events(start_number: int) -> str:
     return get_daily_events_core(start_number)
 
 # -------------------------------------------------------------------------
-# search_auroville_events() (Unchanged - original logic preserved)
+# UPDATED search_auroville_events() (Includes search filtering fix)
 # -------------------------------------------------------------------------
 
 @function_tool
@@ -282,15 +291,32 @@ def search_auroville_events(
             pass
 
     if filter_day:
-        simple_filters["day"] = filter_day
+        # Prioritize the day derived from the date if a date was provided
+        if not filter_date:
+            simple_filters["day"] = filter_day
     if filter_location:
         simple_filters["location"] = filter_location
 
-    if len(simple_filters) == 1:
+    # --- START OF NEW/FIXED FILTER CONSTRUCTION ---
+    if filter_date and simple_filters.get("day"):
+        # If both a specific date and a corresponding day are available (e.g., Dec 1st & Monday),
+        # use an OR filter to catch BOTH date-specific matches AND weekly matches for the day.
+        # The strict filtering of irrelevant date-specific events happens LATER (post-retrieval).
+        or_conditions = []
+        or_conditions.append({"date": {"$eq": filter_date}}) # Date-specific events matching the query
+        or_conditions.append({"day": {"$eq": simple_filters["day"]}}) # Weekly events matching the day
+        if filter_location:
+            or_conditions.append({"location": {"$eq": filter_location}}) # Location filter
+            
+        chroma_filter["$or"] = or_conditions
+        
+    elif len(simple_filters) == 1:
         k, v = list(simple_filters.items())[0]
         chroma_filter[k] = {"$eq": v}
     elif len(simple_filters) > 1:
-        chroma_filter["$or"] = [{k: {"$eq": v}} for k, v in simple_filters.items()]
+        # Fallback for multi-filters (e.g., day + location, without a specific date)
+        chroma_filter["$and"] = [{k: {"$eq": v}} for k, v in simple_filters.items()]
+    # --- END OF NEW/FIXED FILTER CONSTRUCTION ---
 
     kwargs = {"k": k_value}
     if chroma_filter:
@@ -318,6 +344,13 @@ def search_auroville_events(
             continue
 
         if is_date_specific(date_str, day_val):
+            # --- START OF NEW/FIXED POST-RETRIEVAL CHECK ---
+            if filter_date and date_str != filter_date:
+                # If the user asked for a specific date (filter_date), we must exclude
+                # any date-specific event that doesn't match that exact date.
+                continue
+            # --- END OF NEW/FIXED POST-RETRIEVAL CHECK ---
+            
             try:
                 event_dt = None
                 for fmt in ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y"]:
@@ -409,7 +442,8 @@ def search_auroville_events(
     return "\n".join(out)
 
 # -------------------------------------------------------------------------
-# --- (D) NEW CORE FUNCTION: get_event_details_core ---
+# NEW CORE FUNCTION: get_event_details_core (Callable by app.py)
+# -------------------------------------------------------------------------
 def get_event_details_core(identifier: str) -> str:
     """Core logic for fetching event details."""
     global EVENT_DATA_STORE
@@ -433,7 +467,7 @@ def get_event_details_core(identifier: str) -> str:
 
     return f"{num}. {format_event_card(doc.metadata, doc.page_content)}"
 
-# --- (C) MODIFIED TOOL: Calls the _core function ---
+# --- MODIFIED TOOL: Calls the _core function (Callable by Agent) ---
 @function_tool
 def get_event_details(identifier: str) -> str:
     """
@@ -441,9 +475,8 @@ def get_event_details(identifier: str) -> str:
     """
     return get_event_details_core(identifier)
 
-
 # -------------------------------------------------------------------------
-# 4. Agent Instructions (UNCHANGED)
+# 4. Agent Instructions
 # -------------------------------------------------------------------------
 
 INSTRUCTIONS = f"""
@@ -466,7 +499,6 @@ Your job:
       3) Return *exactly* the tool output.  
          You may fix small grammar in plain text,
          but **never modify or remove the numbered event list or its numbers**.
-     4) Remove duplicate events.
 
 - You MUST NOT handle:
       • details(NUM)
@@ -497,7 +529,7 @@ If metadata is missing, omit that field.
 """
 
 # -------------------------------------------------------------------------
-# Tools & Agent setup (UNCHANGED)
+# Tools & Agent setup
 # -------------------------------------------------------------------------
 
 tools = [
