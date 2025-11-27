@@ -110,7 +110,7 @@ async def streaming_chat(question, history, session_id):
         yield updated_history
         return
 
-    # 3. LLM Flow
+    # 3. LLM Flow (Updated with robust stream processing)
     session_handler.save_message(session_id, "user", q)
     messages = history.copy()
     messages.append({"role": "user", "content": q})
@@ -125,15 +125,22 @@ async def streaming_chat(question, history, session_id):
         trace_id = gen_trace_id()
         with trace("Auroville chatbot", trace_id=trace_id):
             result = Runner.run_streamed(auroville_agent, clean_message)
+            
+            # --- START OF UPDATED STREAM LOGIC ---
             async for event in result.stream_events():
-                if type(event).__name__ == "RawResponsesStreamEvent":
-                    data = event.data
-                    if data.__class__.__name__ == "ResponseTextDeltaEvent":
-                        response_text += data.delta
-                        updated_history = history.copy()
-                        updated_history.append({"role": "user", "content": q})
-                        updated_history.append({"role": "assistant", "content": response_text})
-                        yield updated_history
+                
+                # Use .get() for safer access to the text delta
+                text_delta = event.get('response_text_delta')
+                
+                if text_delta:
+                    response_text += text_delta
+                    
+                    # Update and yield history to display the stream
+                    updated_history = history.copy()
+                    updated_history.append({"role": "user", "content": q})
+                    updated_history.append({"role": "assistant", "content": response_text})
+                    yield updated_history
+            # --- END OF UPDATED STREAM LOGIC ---
 
         if response_text:
             session_handler.save_message(session_id, "assistant", response_text)
