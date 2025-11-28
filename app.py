@@ -117,10 +117,30 @@ async def streaming_chat(question, history, session_id):
 
     try:
         response_text = ""
-        clean_message = [
-            {"role": m["role"], "content": m["content"]}
-            for m in messages if "role" in m and "content" in m
-        ]
+        # --- REPLACEMENT CODE START ---
+        clean_message = []
+        for m in messages:
+            if "role" in m and "content" in m:
+                content = m["content"]
+                text_content = ""
+
+                # Handle Gradio's dictionary format {'text': '...', 'type': 'text'}
+                if isinstance(content, dict):
+                    text_content = content.get("text", str(content))
+                # Handle Multimodal list format (rare but possible in Gradio)
+                elif isinstance(content, list):
+                    # Join text parts if it's a list of components
+                    text_parts = [
+                        item.get("text", "") if isinstance(item, dict) else str(item)
+                        for item in content
+                    ]
+                    text_content = " ".join(text_parts)
+                # Handle standard string
+                else:
+                    text_content = str(content)
+
+                clean_message.append({"role": m["role"], "content": text_content})
+        # --- REPLACEMENT CODE END ---
         
         trace_id = gen_trace_id()
         with trace("Auroville chatbot", trace_id=trace_id):
