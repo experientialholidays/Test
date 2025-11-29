@@ -1,7 +1,8 @@
 import os
 import shutil
 import pandas as pd
-import ast  
+import ast
+import re  # NEW: For regex splitting of date ranges
 from datetime import datetime, time
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -41,48 +42,78 @@ class VectorDBManager:
         }
 
     def load_documents(self):
-        # --- SAFETY HELPER (ONLY NEW ADDITION) ---
+        # --- SAFETY HELPER ---
         def cell_to_str(val):
-            """Convert Excel cell values to clean strings.
-               Empty cells → ""
-               NaN → ""
-               datetime → formatted date
-               everything else → stripped string
+            """Convert Excel cell values to clean strings."""
+            if val is None: return ""
+            try:
+                if pd.isna(val): return ""
+            except Exception: pass
+            if isinstance(val, float) and str(val) == "nan": return ""
+            if isinstance(val, datetime): return val.strftime("%B %d, %Y")
+            if isinstance(val, str): return val.strip()
+            if isinstance(val, (int, float)): return str(val)
+            try: return str(val).strip()
+            except Exception: return ""
+
+        # --- NEW DATE PARSING HELPER ---
+        def parse_date_to_iso_range(date_str):
             """
-            # None or empty
-            if val is None:
-                return ""
+            Parses a date string (single or range) into ISO start/end dates.
+            Returns tuple: (start_date_iso, end_date_iso) or ("", "")
+            """
+            if not date_str:
+                return "", ""
 
-            # Pandas NA
-            try:
-                if pd.isna(val):
-                    return ""
-            except Exception:
-                pass
+            s = str(date_str).strip()
+            year = datetime.now().year
+            formats = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d"]
 
-            # Excel nan float
-            if isinstance(val, float) and str(val) == "nan":
-                return ""
+            def try_parse(ds):
+                for fmt in formats:
+                    try:
+                        p = ds
+                        if "%Y" not in fmt and "%y" not in fmt:
+                            p = f"{ds}, {year}"
+                        return datetime.strptime(p.strip(), fmt.strip()).date()
+                    except:
+                        continue
+                return None
 
-            # Datetime → format
-            if isinstance(val, datetime):
-                return val.strftime("%B %d, %Y")
+            # 1. Try Regex for "17-28 November" pattern (Digit + Separator + Digit + Month)
+            # This handles cases where the first date lacks the month
+            range_match = re.search(r'^(\d{1,2})\s*[—–-]\s*(\d{1,2})\s+([A-Za-z]+)$', s)
+            if range_match:
+                start_day, end_day, month_str = range_match.groups()
+                start_full = f"{start_day} {month_str}"
+                end_full = f"{end_day} {month_str}"
+                
+                sd = try_parse(start_full)
+                ed = try_parse(end_full)
+                if sd and ed:
+                    return sd.strftime("%Y-%m-%d"), ed.strftime("%Y-%m-%d")
 
-            # Strings → strip
-            if isinstance(val, str):
-                return val.strip()
+            # 2. Standard Split (e.g., "Nov 17 - Nov 28")
+            parts = re.split(r'\s*[—–-]\s*|\s+to\s+', s)
+            
+            if len(parts) == 2:
+                start_obj = try_parse(parts[0])
+                end_obj = try_parse(parts[1])
+                # Logic: If first part failed (e.g. "17") but second passed, usually handled by regex above,
+                # but good fallback to return nothing if ambiguous.
+                if start_obj and end_obj:
+                    return start_obj.strftime("%Y-%m-%d"), end_obj.strftime("%Y-%m-%d")
+            
+            # 3. Single Date
+            elif len(parts) == 1:
+                single_obj = try_parse(parts[0])
+                if single_obj:
+                    iso = single_obj.strftime("%Y-%m-%d")
+                    return iso, iso
 
-            # Numbers
-            if isinstance(val, (int, float)):
-                return str(val)
+            return "", ""
 
-            # Fallback
-            try:
-                return str(val).strip()
-            except Exception:
-                return ""
-
-        # ------------------- ORIGINAL CODE BELOW -------------------
+        # ------------------- LOADING LOGIC -------------------
 
         documents = []
         for file in os.listdir(self.folder):
@@ -103,22 +134,22 @@ class VectorDBManager:
                     for index, row in df.iterrows():
                         row_text = ", ".join([str(x) for x in row.tolist()])
 
-                        # ---- FIXED: all values now pass through cell_to_str ----
+                        # Clean values
                         day_raw = cell_to_str(row.get("days", ""))
                         date = cell_to_str(row.get("dates", ""))
                         location = cell_to_str(row.get("venue", ""))
-
                         title = cell_to_str(row.get("event name", ""))
                         time_str = cell_to_str(row.get("times", ""))
                         contribution = cell_to_str(row.get("cost/contribution", ""))
-
                         contact_info = cell_to_str(row.get("contact person/unit", ""))
                         phone_number = cell_to_str(row.get("contact phone/whatsapp", ""))
                         category = cell_to_str(row.get("category", ""))
-
                         poster_url_raw = cell_to_str(row.get("website/link", ""))
                         poster_url = poster_url_raw if poster_url_raw else None
-                        # ---------------------------------------------------------
+
+                        # --- NEW: Generate ISO Start/End Meta ---
+                        start_date_meta, end_date_meta = parse_date_to_iso_range(date)
+                        # ----------------------------------------
 
                         # Multi-day handling
                         if day_raw.startswith("[") and day_raw.endswith("]"):
@@ -153,6 +184,9 @@ class VectorDBManager:
                                         "poster_url": poster_url,
                                         "phone": phone_number,
                                         "category": category if category else "",
+                                        # NEW METADATA FIELDS
+                                        "start_date_meta": start_date_meta,
+                                        "end_date_meta": end_date_meta
                                     },
                                 )
                             )
@@ -167,7 +201,8 @@ class VectorDBManager:
                         "day": "", "date": "", "location": "",
                         "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": "",
-                        "category": ""
+                        "category": "",
+                        "start_date_meta": "", "end_date_meta": "" # Default empty for PDFs
                     })
                     documents.append(doc)
 
@@ -180,7 +215,8 @@ class VectorDBManager:
                         "day": "", "date": "", "location": "",
                         "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": "",
-                        "category": ""
+                        "category": "",
+                        "start_date_meta": "", "end_date_meta": "" # Default empty for TXT
                     })
                     documents.append(doc)
 
