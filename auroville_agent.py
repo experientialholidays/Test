@@ -2,7 +2,7 @@
 import os
 import logging
 import urllib.parse
-from datetime import datetime, time
+from datetime import datetime, time, date # Added 'date' to imports
 from typing import Optional, Dict, Any, List
 import re
 
@@ -19,6 +19,26 @@ from langchain_core.documents import Document
 def is_date_specific(date_str, day_str):
     """Classifies an event as date-specific."""
     return bool(date_str and str(date_str).strip().lower() not in ('', 'n/a', 'upcoming', 'none'))
+
+# NEW HELPER FUNCTION FOR DATE STRING PARSING
+def _parse_date_string(date_str: str, year: int) -> Optional[date]:
+    """Robustly parses a date string into a datetime.date object."""
+    if not date_str:
+        return None
+    DATE_FORMATS = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d"]
+    
+    for fmt in DATE_FORMATS:
+        try:
+            p = date_str
+            if "%Y" not in fmt and "%y" not in fmt:
+                # If year is missing, assume the provided year
+                p = f"{date_str.strip()}, {year}"
+            
+            # Use 'datetime' from imported 'datetime'
+            return datetime.strptime(p.strip(), fmt.strip()).date()
+        except:
+            continue
+    return None
 
 # -------------------------------------------------------------------------
 # Robust Time Parser for Sorting (No changes)
@@ -165,11 +185,12 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     return "\n".join(out)
 
 # -------------------------------------------------------------------------
-# Clickable, numbered summary formatting (MODIFIED to include index)
+# Clickable, numbered summary formatting (MODIFIED to include date)
 # -------------------------------------------------------------------------
 
 def format_summary_numbered(index: int, meta: Dict) -> str:
     title = meta.get('title', '').strip()
+    date_str = meta.get('date', '').strip() # NEW: retrieve date string
     day = meta.get('day', '').strip()
     time_str = meta.get('time', '').strip()
     loc = meta.get('location', '').strip()
@@ -177,7 +198,9 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
     phone = meta.get('phone', '').strip()
 
     parts = []
-    if day: parts.append(day)
+    if date_str: parts.append(date_str) # NEW: add date first
+    elif day: parts.append(day) 
+    
     if time_str: parts.append(time_str)
     if loc: parts.append(f"@{loc}")
     if contrib: parts.append(f"| Contrib: {contrib}")
@@ -185,6 +208,7 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
         parts.append(f"| Ph:{''.join(filter(str.isdigit, phone))}")
 
     line = " ".join(parts)
+    # MODIFICATION: Added the index number next to 'View details'
     return (
         f"{index}. **{title}** — {line}\n"
         f"   👉 <a href='#DETAILS::{index}'>View details **({index})**</a>"
@@ -241,7 +265,7 @@ def get_daily_events(start_number: int) -> str:
     return get_daily_events_core(start_number)
 
 # -------------------------------------------------------------------------
-# search_auroville_events() (UPDATED WITH LOGIC)
+# search_auroville_events() (UPDATED WITH DATE RANGE LOGIC)
 # -------------------------------------------------------------------------
 
 @function_tool
@@ -262,32 +286,20 @@ def search_auroville_events(
     chroma_filter = {}
     simple_filters = {}
     
-    # We will try to parse filter_date into a comparable object for strict filtering later
-    query_date_obj = None
-    DATE_FORMATS = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d"]
     now = datetime.now()
     today = now.date()
     now_time = now.time()
 
-    # Pre-process filter_date to populate simple_filters['day']
+    # MODIFIED: Streamlined Query Date Parsing using the new helper
+    query_date_obj = None
     if filter_date:
-        simple_filters["date"] = filter_date
-        # Try to parse the filter_date for two reasons:
-        # 1. To get the 'day' (e.g., 'Monday') for chroma filtering
-        # 2. To store as query_date_obj for strict date exclusion later
-        for fmt in DATE_FORMATS:
-            try:
-                parse_str = filter_date
-                # If year is missing, assume current year for parsing
-                if "%Y" not in fmt and "%y" not in fmt:
-                    parse_str = f"{filter_date}, {now.year}"
-                
-                dt = datetime.strptime(parse_str.strip(), fmt.strip())
-                query_date_obj = dt.date()
-                simple_filters["day"] = dt.strftime("%A")
-                break
-            except:
-                continue
+        query_date_obj = _parse_date_string(filter_date, now.year)
+        if query_date_obj:
+            simple_filters["date"] = filter_date
+            simple_filters["day"] = query_date_obj.strftime("%A")
+        # Ensure we still use filter_date in chroma filter even if parsing fails
+        elif filter_date:
+             simple_filters["date"] = filter_date
 
     if filter_day:
         simple_filters["day"] = filter_day
@@ -313,58 +325,49 @@ def search_auroville_events(
 
     for doc in docs:
         title = doc.metadata.get('title')
-        date_str = str(doc.metadata.get('date', '')).strip()
+        # Assuming metadata now includes 'start_date_meta' and 'end_date_meta' (YYYY-MM-DD format)
+        start_str = str(doc.metadata.get('start_date_meta', '')).strip()
+        end_str = str(doc.metadata.get('end_date_meta', '')).strip()
         day_val = str(doc.metadata.get('day', '')).strip()
         time_str = str(doc.metadata.get('time', '')).strip()
 
         # Deduplication
-        key = (title, date_str, day_val)
+        key = (title, start_str, end_str, day_val)
         if key in seen:
             continue
         
-        # --- Strict Date & Time Checking Logic ---
-        
-        # 1. Parse Document Date if possible
-        doc_date_obj = None
-        if is_date_specific(date_str, day_val):
-            for fmt in DATE_FORMATS:
-                try:
-                    p = date_str
-                    if "%Y" not in fmt and "%y" not in fmt:
-                        p = f"{date_str}, {now.year}"
-                    doc_date_obj = datetime.strptime(p.strip(), fmt.strip()).date()
-                    break
-                except:
-                    continue
+        # Parse start and end dates using the new helper
+        doc_start_date = _parse_date_string(start_str, now.year)
+        doc_end_date = _parse_date_string(end_str, now.year)
 
-        # 2. CHECK A: Date-Specific Exclusion (Strict Match)
-        # If the user asked for a specific date, and this event has a specific date,
-        # they MUST match.
-        if query_date_obj and doc_date_obj:
-            if doc_date_obj != query_date_obj:
-                continue # Skip event: wrong date
-        
-        # 3. CHECK B: Time Exclusion (Past Events)
-        
-        # Case i: Specific Date is in the past
-        if doc_date_obj and doc_date_obj < today:
-            continue # Skip event: Date passed
+        # --- Filter A: Strict Date Range Match ---
+        # If the user provided a search date, ensure it falls within the event's date range.
+        if query_date_obj:
+            if doc_start_date and doc_end_date:
+                # Check if query date is outside the event's range
+                if not (doc_start_date <= query_date_obj <= doc_end_date):
+                    continue # Skip event: Query date is outside the range
 
-        # Case ii: Event is happening TODAY (Specific Date OR Weekly Day Match)
+        # --- Filter B: Past Event Exclusion (Based on End Date) ---
+        # If the entire event has already finished (end date is before today), remove it.
+        if doc_end_date and doc_end_date < today:
+            continue # Skip event: The event is completely over
+
+        # --- Filter C: Time Exclusion (For Events Happening Today) ---
         is_happening_today = False
         
-        if doc_date_obj and doc_date_obj == today:
+        # Case 1: It's a date-specific/range event that includes today
+        if doc_start_date and doc_end_date and (doc_start_date <= today <= doc_end_date):
             is_happening_today = True
-        elif not doc_date_obj:
-            # It's a recurring/weekly event. Check if the day matches today.
-            today_day_name = today.strftime("%A") # e.g., "Friday"
-            if day_val and day_val.lower() == today_day_name.lower():
+        # Case 2: It's a recurring/weekly event and the day matches today
+        elif not doc_start_date and day_val:
+            today_day_name = today.strftime("%A") 
+            if day_val.lower() == today_day_name.lower():
                 is_happening_today = True
         
         if is_happening_today:
             # Check if time has passed
             event_time = parse_time_for_sort(time_str)
-            # Compare times
             if event_time < now_time:
                 continue # Skip event: Time passed today
 
@@ -374,7 +377,7 @@ def search_auroville_events(
     if not filtered:
         return "I couldn't find any upcoming or ongoing events matching those criteria."
 
-    # Normalize categories
+    # Normalize categories (No changes here, but relies on filtered list)
     for doc in filtered:
         raw = (doc.metadata.get('category') or "").lower()
         doc.metadata["_sort_time"] = parse_time_for_sort(doc.metadata.get("time", ""))
@@ -493,8 +496,7 @@ Your job:
       1) First call `vectordb_query_selector_agent` to refine the search query.
       2) Then call `search_auroville_events` using the refined query.
       3) You may correct small grammar issues *outside* the numbered blocks or remove duplicate text for better understanding.
-      4) You must check duplicate events and remove them.
-      5) When tool output lists categories, keep them exactly:
+      4) When tool output lists categories, keep them exactly:
          - Date-specific Events
          - Weekly Events
          - Daily Events
