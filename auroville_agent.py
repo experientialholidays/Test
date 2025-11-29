@@ -185,7 +185,6 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
         parts.append(f"| Ph:{''.join(filter(str.isdigit, phone))}")
 
     line = " ".join(parts)
-    # MODIFICATION: Added the index number next to 'View details'
     return (
         f"{index}. **{title}** — {line}\n"
         f"   👉 <a href='#DETAILS::{index}'>View details **({index})**</a>"
@@ -242,7 +241,7 @@ def get_daily_events(start_number: int) -> str:
     return get_daily_events_core(start_number)
 
 # -------------------------------------------------------------------------
-# search_auroville_events() (Unchanged - original logic preserved)
+# search_auroville_events() (UPDATED WITH LOGIC)
 # -------------------------------------------------------------------------
 
 @function_tool
@@ -262,24 +261,33 @@ def search_auroville_events(
     k_value = 100 if specificity.lower() == "broad" else 12
     chroma_filter = {}
     simple_filters = {}
+    
+    # We will try to parse filter_date into a comparable object for strict filtering later
+    query_date_obj = None
+    DATE_FORMATS = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d"]
+    now = datetime.now()
+    today = now.date()
+    now_time = now.time()
 
-    # date/day normalization
+    # Pre-process filter_date to populate simple_filters['day']
     if filter_date:
         simple_filters["date"] = filter_date
-        try:
-            for fmt in ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y"]:
-                try:
-                    year = datetime.now().year
-                    parse_str = filter_date
-                    if "%Y" not in fmt and "%y" not in fmt:
-                        parse_str = f"{filter_date}, {year}"
-                    dt = datetime.strptime(parse_str.strip(), fmt.strip())
-                    simple_filters["day"] = dt.strftime("%A")
-                    break
-                except:
-                    continue
-        except:
-            pass
+        # Try to parse the filter_date for two reasons:
+        # 1. To get the 'day' (e.g., 'Monday') for chroma filtering
+        # 2. To store as query_date_obj for strict date exclusion later
+        for fmt in DATE_FORMATS:
+            try:
+                parse_str = filter_date
+                # If year is missing, assume current year for parsing
+                if "%Y" not in fmt and "%y" not in fmt:
+                    parse_str = f"{filter_date}, {now.year}"
+                
+                dt = datetime.strptime(parse_str.strip(), fmt.strip())
+                query_date_obj = dt.date()
+                simple_filters["day"] = dt.strftime("%A")
+                break
+            except:
+                continue
 
     if filter_day:
         simple_filters["day"] = filter_day
@@ -300,10 +308,6 @@ def search_auroville_events(
     if not docs:
         return "I couldn't find any upcoming events matching those criteria."
 
-    now = datetime.now()
-    today = now.date()
-    now_time = now.time()
-
     filtered = []
     seen = set()
 
@@ -313,31 +317,56 @@ def search_auroville_events(
         day_val = str(doc.metadata.get('day', '')).strip()
         time_str = str(doc.metadata.get('time', '')).strip()
 
+        # Deduplication
         key = (title, date_str, day_val)
         if key in seen:
             continue
-
+        
+        # --- Strict Date & Time Checking Logic ---
+        
+        # 1. Parse Document Date if possible
+        doc_date_obj = None
         if is_date_specific(date_str, day_val):
-            try:
-                event_dt = None
-                for fmt in ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y"]:
-                    try:
-                        p = date_str
-                        if "%Y" not in fmt and "%y" not in fmt:
-                            p = f"{date_str}, {today.year}"
-                        d = datetime.strptime(p.strip(), fmt.strip()).date()
-                        t = parse_time_for_sort(time_str)
-                        event_dt = datetime.combine(d, t)
-                        break
-                    except:
-                        continue
-                if event_dt:
-                    if event_dt.date() < today:
-                        continue
-                    if event_dt.date() == today and event_dt.time() < now_time:
-                        continue
-            except:
-                pass
+            for fmt in DATE_FORMATS:
+                try:
+                    p = date_str
+                    if "%Y" not in fmt and "%y" not in fmt:
+                        p = f"{date_str}, {now.year}"
+                    doc_date_obj = datetime.strptime(p.strip(), fmt.strip()).date()
+                    break
+                except:
+                    continue
+
+        # 2. CHECK A: Date-Specific Exclusion (Strict Match)
+        # If the user asked for a specific date, and this event has a specific date,
+        # they MUST match.
+        if query_date_obj and doc_date_obj:
+            if doc_date_obj != query_date_obj:
+                continue # Skip event: wrong date
+        
+        # 3. CHECK B: Time Exclusion (Past Events)
+        
+        # Case i: Specific Date is in the past
+        if doc_date_obj and doc_date_obj < today:
+            continue # Skip event: Date passed
+
+        # Case ii: Event is happening TODAY (Specific Date OR Weekly Day Match)
+        is_happening_today = False
+        
+        if doc_date_obj and doc_date_obj == today:
+            is_happening_today = True
+        elif not doc_date_obj:
+            # It's a recurring/weekly event. Check if the day matches today.
+            today_day_name = today.strftime("%A") # e.g., "Friday"
+            if day_val and day_val.lower() == today_day_name.lower():
+                is_happening_today = True
+        
+        if is_happening_today:
+            # Check if time has passed
+            event_time = parse_time_for_sort(time_str)
+            # Compare times
+            if event_time < now_time:
+                continue # Skip event: Time passed today
 
         seen.add(key)
         filtered.append(doc)
@@ -443,7 +472,7 @@ def get_event_details(identifier: str) -> str:
 
 
 # -------------------------------------------------------------------------
-# 4. Agent Instructions (UNCHANGED)
+# 4. Agent Instructions (UPDATED - Removed Logic Checks)
 # -------------------------------------------------------------------------
 
 INSTRUCTIONS = f"""
@@ -463,16 +492,12 @@ Your job:
 - For general search queries:
       1) First call `vectordb_query_selector_agent` to refine the search query.
       2) Then call `search_auroville_events` using the refined query.
-      3) After receiving output from the `search_auroville_events` tool, you must perform these strict checks on the resulting list of events before returning the final output:
-                A. **Date-Specific Exclusion:** For any event that has a specific date, you must check if that date matches the `filter_date` provided in the tool call. **REMOVE** any date-specific event where its date does **NOT** match the `filter_date` from the query. (This excludes irrelevant future events like a workshop on the wrong Monday).
-                B. **Time Exclusion:** Check the date and time of each event against the **current date and time** when the user query was made. **REMOVE** any event that is already in the past or whose start time on the current day has already passed.
-
-     4. You may correct small grammar issues *outside* the numbered blocks or remove duplicate text form better understanding.
-     5. When tool output lists categories, keep them exactly:
-       - Date-specific Events
-       - Weekly Events
-       - Daily Events
-    
+      3) You may correct small grammar issues *outside* the numbered blocks or remove duplicate text for better understanding.
+      4) You must check duplicate events and remove them.
+      5) When tool output lists categories, keep them exactly:
+         - Date-specific Events
+         - Weekly Events
+         - Daily Events
 
 - You MUST NOT handle:
       • details(NUM)
