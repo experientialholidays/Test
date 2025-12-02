@@ -37,7 +37,7 @@ class VectorDBManager:
             "Cost/Contribution": "contribution", 
             "Contact Person/Unit": "contact", 
             "Contact Phone/Whatsapp": "phone", 
-            "Website/Link": "poster_url",
+            "poster url": "poster_url",
             "Category": "category", 
         }
 
