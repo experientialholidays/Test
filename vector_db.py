@@ -67,7 +67,7 @@ class VectorDBManager:
 
             s = str(date_str).strip()
             year = datetime.now().year
-            formats = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d"]
+            formats = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]
 
             def try_parse(ds):
                 for fmt in formats:
