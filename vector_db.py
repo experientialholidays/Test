@@ -2,7 +2,7 @@ import os
 import shutil
 import pandas as pd
 import ast
-import re  # NEW: For regex splitting of date ranges
+import re
 from datetime import datetime, time
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -39,6 +39,10 @@ class VectorDBManager:
             "Contact Phone/Whatsapp": "phone", 
             "poster url": "poster_url",
             "Category": "category", 
+            # NEW HEADERS ADDED HERE
+            "Description": "description",
+            "Contact Email": "email",
+            "Target Audience/Prerequisites": "audience",
         }
 
     def load_documents(self):
@@ -56,7 +60,7 @@ class VectorDBManager:
             try: return str(val).strip()
             except Exception: return ""
 
-        # --- NEW DATE PARSING HELPER ---
+        # --- DATE PARSING HELPER (kept for context, no change) ---
         def parse_date_to_iso_range(date_str):
             """
             Parses a date string (single or range) into ISO start/end dates.
@@ -80,8 +84,7 @@ class VectorDBManager:
                         continue
                 return None
 
-            # 1. Try Regex for "17-28 November" pattern (Digit + Separator + Digit + Month)
-            # This handles cases where the first date lacks the month
+            # 1. Try Regex for "17-28 November" pattern
             range_match = re.search(r'^(\d{1,2})\s*[—–-]\s*(\d{1,2})\s+([A-Za-z]+)$', s)
             if range_match:
                 start_day, end_day, month_str = range_match.groups()
@@ -99,8 +102,6 @@ class VectorDBManager:
             if len(parts) == 2:
                 start_obj = try_parse(parts[0])
                 end_obj = try_parse(parts[1])
-                # Logic: If first part failed (e.g. "17") but second passed, usually handled by regex above,
-                # but good fallback to return nothing if ambiguous.
                 if start_obj and end_obj:
                     return start_obj.strftime("%Y-%m-%d"), end_obj.strftime("%Y-%m-%d")
             
@@ -127,14 +128,19 @@ class VectorDBManager:
                     df.columns = df.columns.str.lower()
                     df = df.fillna('')
 
-                    for col in self.EXCEL_HEADERS.keys():
-                        if col in df.columns:
-                            df[col] = df[col].astype(str)
+                    # Convert all relevant columns to string for consistent handling
+                    for col_key in self.EXCEL_HEADERS.keys():
+                         # Need to check for the lowercase version of the header name as column names were lowered earlier
+                        col_lower = col_key.lower()
+                        if col_lower in df.columns:
+                            # Use original header key for lookup in row.get() later
+                            df[col_lower] = df[col_lower].astype(str)
 
                     for index, row in df.iterrows():
+                        # Use lowercase keys for robust row lookup
                         row_text = ", ".join([str(x) for x in row.tolist()])
 
-                        # Clean values
+                        # Existing Clean values
                         day_raw = cell_to_str(row.get("days", ""))
                         date = cell_to_str(row.get("dates", ""))
                         location = cell_to_str(row.get("venue", ""))
@@ -144,12 +150,17 @@ class VectorDBManager:
                         contact_info = cell_to_str(row.get("contact person/unit", ""))
                         phone_number = cell_to_str(row.get("contact phone/whatsapp", ""))
                         category = cell_to_str(row.get("category", ""))
-                        poster_url_raw = cell_to_str(row.get("website/link", ""))
+                        poster_url_raw = cell_to_str(row.get("poster url", "")) # Corrected to "poster url" per EXCEL_HEADERS
                         poster_url = poster_url_raw if poster_url_raw else None
 
-                        # --- NEW: Generate ISO Start/End Meta ---
-                        start_date_meta, end_date_meta = parse_date_to_iso_range(date)
+                        # --- NEW: Extract and Clean New Values ---
+                        description = cell_to_str(row.get("description", ""))
+                        contact_email = cell_to_str(row.get("contact email", ""))
+                        target_audience = cell_to_str(row.get("target audience/prerequisites", ""))
                         # ----------------------------------------
+
+                        # Generate ISO Start/End Meta
+                        start_date_meta, end_date_meta = parse_date_to_iso_range(date)
 
                         # Multi-day handling
                         if day_raw.startswith("[") and day_raw.endswith("]"):
@@ -184,9 +195,13 @@ class VectorDBManager:
                                         "poster_url": poster_url,
                                         "phone": phone_number,
                                         "category": category if category else "",
-                                        # NEW METADATA FIELDS
+                                        # DATE METADATA
                                         "start_date_meta": start_date_meta,
-                                        "end_date_meta": end_date_meta
+                                        "end_date_meta": end_date_meta,
+                                        # NEW METADATA FIELDS ADDED HERE
+                                        "description": description,
+                                        "email": contact_email,
+                                        "audience": target_audience,
                                     },
                                 )
                             )
@@ -202,7 +217,9 @@ class VectorDBManager:
                         "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": "",
                         "category": "",
-                        "start_date_meta": "", "end_date_meta": "" # Default empty for PDFs
+                        "start_date_meta": "", "end_date_meta": "",
+                        # NEW METADATA DEFAULTS
+                        "description": "", "email": "", "audience": ""
                     })
                     documents.append(doc)
 
@@ -216,7 +233,9 @@ class VectorDBManager:
                         "title": "Document Content", "time": "", "contribution": "",
                         "contact": "", "poster_url": None, "phone": "",
                         "category": "",
-                        "start_date_meta": "", "end_date_meta": "" # Default empty for TXT
+                        "start_date_meta": "", "end_date_meta": "",
+                        # NEW METADATA DEFAULTS
+                        "description": "", "email": "", "audience": ""
                     })
                     documents.append(doc)
 
