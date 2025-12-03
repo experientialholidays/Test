@@ -34,7 +34,7 @@ VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
 try:
     print("--- STARTING VECTOR DB INITIALIZATION ---")
-    vectorstore = db_manager.create_or_load_db(force_refresh=false)
+    vectorstore = db_manager.create_or_load_db(force_refresh=True)
     initialize_retriever(vectorstore)
     print("--- VECTOR DB INITIALIZATION COMPLETE ---")
 except Exception as e:
