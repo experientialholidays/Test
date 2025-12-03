@@ -1,4 +1,3 @@
-# auroville_agent.py
 import os
 import logging
 import urllib.parse
@@ -133,21 +132,35 @@ gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
 
 # -------------------------------------------------------------------------
-# 2. Formatting Helpers (format_event_card is unchanged)
+# 2. Formatting Helpers (MODIFIED format_event_card)
 # -------------------------------------------------------------------------
 
 def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     title = doc_metadata.get('title', 'Event').strip()
     date_str = doc_metadata.get('date', '').strip()
-    day_str = doc_metadata.get('day', '').strip()
+    
+    # 1. CLEAN THE DAY STRING: Remove [, ], ', ", and ,
+    raw_day = doc_metadata.get('day', '').strip() 
+    # Replace bracket, quote, comma with space
+    day_str = re.sub(r"[\[\]'\",]", " ", raw_day)
+    # Collapse multiple spaces into one
+    day_str = re.sub(r"\s+", " ", day_str).strip()
+
     time_str = doc_metadata.get('time', '').strip()
     location = doc_metadata.get('location', '').strip()
     contribution = doc_metadata.get('contribution', '').strip()
     contact_info = doc_metadata.get('contact', '').strip()
-    description = doc_content.strip()
     poster_url = doc_metadata.get('poster_url')
     phone_number = doc_metadata.get('phone', '').strip()
     category = doc_metadata.get('category', '').strip()
+
+    # 4. Use metadata description instead of raw chunk content (doc_content)
+    description_meta = doc_metadata.get('description', '').strip()
+    # 2. Add contact email
+    email_str = doc_metadata.get('email', '').strip()
+    # 3. Add Target Audience/Prerequisites
+    audience_str = doc_metadata.get('audience', '').strip()
+
 
     out = []
     out.append(f"**Event Name:** {title}")
@@ -165,19 +178,36 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
         out.append(f"**Where:** {location}")
     if contribution:
         out.append(f"**Contribution:** {contribution}")
+        
+    if audience_str:
+        out.append(f"**Target Audience/Prerequisites:** {audience_str}")
+
+    # --- Contact Info Block (Updated) ---
+    contact_parts = []
+    if contact_info: contact_parts.append(contact_info)
+    if email_str: contact_parts.append(f"Email: {email_str}")
 
     clean_phone = ''.join(filter(str.isdigit, phone_number))
     wa_link = ""
     if clean_phone:
         msg = f"Hi, I came across your event '{title}' scheduled on {date_str}. Info?"
         wa = urllib.parse.quote(msg)
-        wa_link = f"\n[**Click to Chat on WhatsApp**](https://wa.me/{clean_phone}?text={wa})"
+        wa_link = f"[**Click to Chat on WhatsApp**](https://wa.me/{clean_phone}?text={wa})"
+        contact_parts.append(wa_link)
 
-    if contact_info or clean_phone:
-        out.append(f"**Contact:** {contact_info}{wa_link}")
+    if contact_parts:
+        # Join basic contact info with separators, placing the WhatsApp link last if it exists
+        display_contact = " | ".join([p for p in contact_parts if p != wa_link])
+        if wa_link and wa_link in contact_parts:
+             display_contact += f"\n{wa_link}"
 
+        out.append(f"**Contact:** {display_contact}")
+    # --- End Contact Info Block ---
+    
+    # 4. Use metadata description
     out.append("\n**Description:**")
-    out.append(description)
+    out.append(description_meta if description_meta else "No detailed description provided.")
+
 
     if poster_url:
         out.append(f"\n\n![Event Poster]({poster_url})")
@@ -185,20 +215,27 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     return "\n".join(out)
 
 # -------------------------------------------------------------------------
-# Clickable, numbered summary formatting (MODIFIED to include date)
+# Clickable, numbered summary formatting (MODIFIED to include audience)
 # -------------------------------------------------------------------------
 
 def format_summary_numbered(index: int, meta: Dict) -> str:
     title = meta.get('title', '').strip()
-    date_str = meta.get('date', '').strip() # NEW: retrieve date string
-    day = meta.get('day', '').strip()
+    date_str = meta.get('date', '').strip()
+    
+    # CLEAN THE DAY STRING HERE TOO
+    raw_day = meta.get('day', '').strip()
+    day = re.sub(r"[\[\]'\",]", " ", raw_day)
+    day = re.sub(r"\s+", " ", day).strip()
+
     time_str = meta.get('time', '').strip()
     loc = meta.get('location', '').strip()
     contrib = meta.get('contribution', '').strip()
     phone = meta.get('phone', '').strip()
+    # Add Target Audience/Prerequisites
+    audience = meta.get('audience', '').strip()
 
     parts = []
-    if date_str: parts.append(date_str) # NEW: add date first
+    if date_str: parts.append(date_str) 
     elif day: parts.append(day) 
     
     if time_str: parts.append(time_str)
@@ -206,6 +243,10 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
     if contrib: parts.append(f"| Contrib: {contrib}")
     if phone:
         parts.append(f"| Ph:{''.join(filter(str.isdigit, phone))}")
+    # NEW: Add Target Audience/Prerequisites to summary
+    if audience:
+        parts.append(f"| Audience: {audience}")
+
 
     line = " ".join(parts)
     # MODIFICATION: Added the index number next to 'View details'
@@ -337,6 +378,9 @@ def search_auroville_events(
             continue
         
         # Parse start and end dates using the new helper
+        # Note: The 'start_date_meta' and 'end_date_meta' are already in YYYY-MM-DD format, 
+        # so parsing them with _parse_date_string (which expects various formats) might be redundant 
+        # but safe as long as YYYY-MM-DD is in the format list.
         doc_start_date = _parse_date_string(start_str, now.year)
         doc_end_date = _parse_date_string(end_str, now.year)
 
