@@ -1,7 +1,7 @@
 import os
 import logging
 import urllib.parse
-from datetime import datetime, time, date # Added 'date' to imports
+from datetime import datetime, time, date
 from typing import Optional, Dict, Any, List
 import re
 
@@ -40,14 +40,14 @@ def _parse_date_string(date_str: str, year: int) -> Optional[date]:
     return None
 
 # -------------------------------------------------------------------------
-# Robust Time Parser for Sorting (No changes)
+# Robust Time Parser for Sorting
 # -------------------------------------------------------------------------
 
 def parse_time_for_sort(raw: str) -> time:
     if not raw:
         return time(23, 59, 59)
 
-    s = str(raw).replace("—", "-").replace("–", "-").strip().upper()
+    s = str(raw).replace("—", "-").replace("–", "-").replace("-", "-").strip().upper()
 
     if re.search(r'\bANYTIME\b|\bOPEN\b|\bALL DAY\b', s):
         return time(23, 59, 59)
@@ -98,7 +98,7 @@ def parse_time_for_sort(raw: str) -> time:
     return time(hour, minute)
 
 # -------------------------------------------------------------------------
-# 1. Setup & Global Cache (No changes)
+# 1. Setup & Global Cache
 # -------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.INFO)
@@ -124,7 +124,7 @@ def initialize_retriever(vectorstore):
     else:
         logger.error("Retriever init failed: Vectorstore is None.")
 
-# Initialize DB & retriever eagerly (same as original file)
+# Initialize DB & retriever eagerly
 vectorstore = db_manager.create_or_load_db()
 initialize_retriever(vectorstore)
 
@@ -132,18 +132,16 @@ gemini_client = AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
 gemini_model = OpenAIChatCompletionsModel(model=MODEL, openai_client=gemini_client)
 
 # -------------------------------------------------------------------------
-# 2. Formatting Helpers (MODIFIED format_event_card)
+# 2. Formatting Helpers (MODIFIED format_event_card for clickable poster)
 # -------------------------------------------------------------------------
 
 def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     title = doc_metadata.get('title', 'Event').strip()
     date_str = doc_metadata.get('date', '').strip()
     
-    # 1. CLEAN THE DAY STRING: Remove [, ], ', ", and ,
+    # CLEAN THE DAY STRING: Remove [, ], ', ", and ,
     raw_day = doc_metadata.get('day', '').strip() 
-    # Replace bracket, quote, comma with space
     day_str = re.sub(r"[\[\]'\",]", " ", raw_day)
-    # Collapse multiple spaces into one
     day_str = re.sub(r"\s+", " ", day_str).strip()
 
     time_str = doc_metadata.get('time', '').strip()
@@ -154,13 +152,9 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     phone_number = doc_metadata.get('phone', '').strip()
     category = doc_metadata.get('category', '').strip()
 
-    # 4. Use metadata description instead of raw chunk content (doc_content)
     description_meta = doc_metadata.get('description', '').strip()
-    # 2. Add contact email
     email_str = doc_metadata.get('email', '').strip()
-    # 3. Add Target Audience/Prerequisites
     audience_str = doc_metadata.get('audience', '').strip()
-
 
     out = []
     out.append(f"**Event Name:** {title}")
@@ -182,7 +176,6 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
     if audience_str:
         out.append(f"**Target Audience/Prerequisites:** {audience_str}")
 
-    # --- Contact Info Block (Updated) ---
     contact_parts = []
     if contact_info: contact_parts.append(contact_info)
     if email_str: contact_parts.append(f"Email: {email_str}")
@@ -196,33 +189,25 @@ def format_event_card(doc_metadata: Dict, doc_content: str) -> str:
         contact_parts.append(wa_link)
 
     if contact_parts:
-        # Join basic contact info with separators, placing the WhatsApp link last if it exists
         display_contact = " | ".join([p for p in contact_parts if p != wa_link])
         if wa_link and wa_link in contact_parts:
              display_contact += f"\n{wa_link}"
-
         out.append(f"**Contact:** {display_contact}")
-    # --- End Contact Info Block ---
-    
-    # 4. Use metadata description
+
     out.append("\n**Description:**")
     out.append(description_meta if description_meta else "No detailed description provided.")
 
-
+    # --- MODIFICATION: Wrap Markdown image tag in HTML anchor tag for clickability ---
     if poster_url:
-        out.append(f"\n\n![Event Poster]({poster_url})")
+        out.append(f"\n\n<a href='{poster_url}' target='_blank'>![Event Poster]({poster_url})</a>")
+    # --------------------------------------------------------------------------------
 
     return "\n".join(out)
-
-# -------------------------------------------------------------------------
-# Clickable, numbered summary formatting (MODIFIED to include audience)
-# -------------------------------------------------------------------------
 
 def format_summary_numbered(index: int, meta: Dict) -> str:
     title = meta.get('title', '').strip()
     date_str = meta.get('date', '').strip()
     
-    # CLEAN THE DAY STRING HERE TOO
     raw_day = meta.get('day', '').strip()
     day = re.sub(r"[\[\]'\",]", " ", raw_day)
     day = re.sub(r"\s+", " ", day).strip()
@@ -231,7 +216,6 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
     loc = meta.get('location', '').strip()
     contrib = meta.get('contribution', '').strip()
     phone = meta.get('phone', '').strip()
-    # Add Target Audience/Prerequisites
     audience = meta.get('audience', '').strip()
 
     parts = []
@@ -243,27 +227,21 @@ def format_summary_numbered(index: int, meta: Dict) -> str:
     if contrib: parts.append(f"| Contrib: {contrib}")
     if phone:
         parts.append(f"| Ph:{''.join(filter(str.isdigit, phone))}")
-    # NEW: Add Target Audience/Prerequisites to summary
     if audience:
         parts.append(f"| Audience: {audience}")
 
-
     line = " ".join(parts)
-    # MODIFICATION: Added the index number next to 'View details'
     return (
         f"{index}. **{title}** — {line}\n"
         f"   👉 <a href='#DETAILS::{index}'>View details **({index})**</a>"
     )
 
 # -------------------------------------------------------------------------
-# 3. Tools (Refactored to Core/Wrapper)
+# 3. Tools 
 # -------------------------------------------------------------------------
 
-# --- (B) NEW CORE FUNCTION: get_daily_events_core ---
 def get_daily_events_core(start_number: int) -> str:
-    """Core logic for fetching daily events."""
     global EVENT_DATA_STORE, vectorstore
-
     try:
         raw = vectorstore.get(
             where={"category": "Daily Events"},
@@ -295,19 +273,10 @@ def get_daily_events_core(start_number: int) -> str:
 
     return "\n".join(out)
 
-# --- (A) MODIFIED TOOL: Calls the _core function ---
 @function_tool
 def get_daily_events(start_number: int) -> str:
-    """
-    Returns ALL Daily Events using metadata filtering only.
-    Category = 'Daily Events'
-    Numbering continues from start_number (so caller can append)
-    """
+    """Returns ALL Daily Events using metadata filtering only."""
     return get_daily_events_core(start_number)
-
-# -------------------------------------------------------------------------
-# search_auroville_events() (UPDATED WITH DATE RANGE LOGIC)
-# -------------------------------------------------------------------------
 
 @function_tool
 def search_auroville_events(
@@ -331,14 +300,12 @@ def search_auroville_events(
     today = now.date()
     now_time = now.time()
 
-    # MODIFIED: Streamlined Query Date Parsing using the new helper
     query_date_obj = None
     if filter_date:
         query_date_obj = _parse_date_string(filter_date, now.year)
         if query_date_obj:
             simple_filters["date"] = filter_date
             simple_filters["day"] = query_date_obj.strftime("%A")
-        # Ensure we still use filter_date in chroma filter even if parsing fails
         elif filter_date:
              simple_filters["date"] = filter_date
 
@@ -366,54 +333,53 @@ def search_auroville_events(
 
     for doc in docs:
         title = doc.metadata.get('title')
-        # Assuming metadata now includes 'start_date_meta' and 'end_date_meta' (YYYY-MM-DD format)
         start_str = str(doc.metadata.get('start_date_meta', '')).strip()
         end_str = str(doc.metadata.get('end_date_meta', '')).strip()
         day_val = str(doc.metadata.get('day', '')).strip()
         time_str = str(doc.metadata.get('time', '')).strip()
 
-        # Deduplication
         key = (title, start_str, end_str, day_val)
         if key in seen:
             continue
         
-        # Parse start and end dates using the new helper
-        # Note: The 'start_date_meta' and 'end_date_meta' are already in YYYY-MM-DD format, 
-        # so parsing them with _parse_date_string (which expects various formats) might be redundant 
-        # but safe as long as YYYY-MM-DD is in the format list.
         doc_start_date = _parse_date_string(start_str, now.year)
         doc_end_date = _parse_date_string(end_str, now.year)
 
         # --- Filter A: Strict Date Range Match ---
-        # If the user provided a search date, ensure it falls within the event's date range.
         if query_date_obj:
+            is_match = False
+            
+            # 1. Check strict date range (if available)
             if doc_start_date and doc_end_date:
-                # Check if query date is outside the event's range
-                if not (doc_start_date <= query_date_obj <= doc_end_date):
-                    continue # Skip event: Query date is outside the range
+                if doc_start_date <= query_date_obj <= doc_end_date:
+                    is_match = True
+            
+            # 2. If no date range, check Day of Week (e.g., "Friday")
+            elif day_val:
+                query_day_short = query_date_obj.strftime("%a").lower() # e.g., 'fri'
+                if query_day_short in day_val.lower():
+                    is_match = True
+            
+            if not is_match:
+                continue
 
         # --- Filter B: Past Event Exclusion (Based on End Date) ---
-        # If the entire event has already finished (end date is before today), remove it.
         if doc_end_date and doc_end_date < today:
-            continue # Skip event: The event is completely over
+            continue 
 
         # --- Filter C: Time Exclusion (For Events Happening Today) ---
         is_happening_today = False
-        
-        # Case 1: It's a date-specific/range event that includes today
         if doc_start_date and doc_end_date and (doc_start_date <= today <= doc_end_date):
             is_happening_today = True
-        # Case 2: It's a recurring/weekly event and the day matches today
         elif not doc_start_date and day_val:
             today_day_name = today.strftime("%A") 
             if day_val.lower() == today_day_name.lower():
                 is_happening_today = True
         
         if is_happening_today:
-            # Check if time has passed
             event_time = parse_time_for_sort(time_str)
             if event_time < now_time:
-                continue # Skip event: Time passed today
+                continue 
 
         seen.add(key)
         filtered.append(doc)
@@ -421,7 +387,6 @@ def search_auroville_events(
     if not filtered:
         return "I couldn't find any upcoming or ongoing events matching those criteria."
 
-    # Normalize categories (No changes here, but relies on filtered list)
     for doc in filtered:
         raw = (doc.metadata.get('category') or "").lower()
         doc.metadata["_sort_time"] = parse_time_for_sort(doc.metadata.get("time", ""))
@@ -457,7 +422,6 @@ def search_auroville_events(
 
     broad = (specificity.lower() == "broad")
 
-    # Show normal categories first
     for c in ["Date-specific Events", "Weekly Events"]:
         if buckets[c]:
             out.append(f"\n **{c}**")
@@ -466,7 +430,6 @@ def search_auroville_events(
                 EVENT_DATA_STORE[idx] = d
                 out.append(format_summary_numbered(idx, d.metadata))
 
-    # Specific search → show daily events normally
     if not broad and buckets["Daily Events"]:
         out.append("\n## 🌞 Daily Events")
         for d in buckets["Daily Events"]:
@@ -474,7 +437,6 @@ def search_auroville_events(
             EVENT_DATA_STORE[idx] = d
             out.append(format_summary_numbered(idx, d.metadata))
 
-    # Broad search → hide + ask Yes/No
     if broad:
         out.append(
             "\nThere are Daily Events also happening every day.\n"
@@ -484,10 +446,7 @@ def search_auroville_events(
 
     return "\n".join(out)
 
-# -------------------------------------------------------------------------
-# --- (D) NEW CORE FUNCTION: get_event_details_core ---
 def get_event_details_core(identifier: str) -> str:
-    """Core logic for fetching event details."""
     global EVENT_DATA_STORE
     
     if identifier is None:
@@ -509,18 +468,10 @@ def get_event_details_core(identifier: str) -> str:
 
     return f"{num}. {format_event_card(doc.metadata, doc.page_content)}"
 
-# --- (C) MODIFIED TOOL: Calls the _core function ---
 @function_tool
 def get_event_details(identifier: str) -> str:
-    """
-    Returns the full details for a specific event using its unique numbered identifier (e.g., '5' or 'details(5)') retrieved from the search results or daily events list.
-    """
+    """Returns the full details for a specific event."""
     return get_event_details_core(identifier)
-
-
-# -------------------------------------------------------------------------
-# 4. Agent Instructions (UPDATED - Removed Logic Checks)
-# -------------------------------------------------------------------------
 
 INSTRUCTIONS = f"""
 You are an AI assistant that answers user questions about Auroville events.
@@ -557,6 +508,7 @@ Rules while formatting responses:
 2. **Do not rewrite or remove summary lines generated by the tools.**
 3. **Do not modify or break clickable HTML links** (e.g., View Details, Yes/No).  
    These links must remain untouched.
+4. You must remove duplicate events. 
 
 When a tool is called:
 - You must simply return the tool output to the user without reformatting.
@@ -565,10 +517,6 @@ Do not hallucinate missing event information.
 If metadata is missing, omit that field.
 
 """
-
-# -------------------------------------------------------------------------
-# Tools & Agent setup (UNCHANGED)
-# -------------------------------------------------------------------------
 
 tools = [
     vectordb_query_selector_agent.as_tool("vectordb_query_selector_agent", "Refines query."),
@@ -583,3 +531,4 @@ auroville_agent = Agent(
     model=gemini_model,
     tools=tools
     )
+```eof
