@@ -364,7 +364,9 @@ def search_auroville_events(
                 continue
 
         # --- Filter B: Past Event Exclusion (Based on End Date) ---
-        if doc_end_date and doc_end_date < today:
+        # NEW/ROBUST LOGIC 
+            effective_end_date = doc_end_date if doc_end_date else doc_start_date
+            if effective_end_date and effective_end_date < today:         
             continue 
 
         # --- Filter C: Time Exclusion (For Events Happening Today) ---
