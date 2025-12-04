@@ -110,7 +110,7 @@ EVENT_DATA_STORE: Dict[int, Document] = {}
 VECTOR_DB_NAME = "vector_db"
 DB_FOLDER = "input"
 MODEL = "gemini-2.5-flash"
-GEMINI_BASE_URL = "[https://generativelanguage.googleapis.com/v1beta/openai/](https://generativelanguage.googleapis.com/v1beta/openai/)"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 google_api_key = os.getenv('GOOGLE_API_KEY')
 
 db_manager = VectorDBManager(folder=DB_FOLDER, db_name=VECTOR_DB_NAME)
