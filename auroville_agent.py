@@ -367,7 +367,7 @@ def search_auroville_events(
         # NEW/ROBUST LOGIC 
             effective_end_date = doc_end_date if doc_end_date else doc_start_date
             if effective_end_date and effective_end_date < today:         
-            continue 
+                continue 
 
         # --- Filter C: Time Exclusion (For Events Happening Today) ---
         is_happening_today = False
