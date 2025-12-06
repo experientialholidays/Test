@@ -332,6 +332,13 @@ def search_auroville_events(
     seen = set()
 
     for doc in docs:
+        # --- START OF DEBUG PRINT CODE TO INSERT ---
+        print(f"\n--- DEBUG METADATA for Doc: {doc.metadata.get('title')} ---")
+        print(f"  Start Date Meta: {doc.metadata.get('start_date_meta')}")
+        print(f"  End Date Meta: {doc.metadata.get('end_date_meta')}")
+        print(f"  Day Value: {doc.metadata.get('day')}")
+        print("-----------------------------------------")
+        # --- END OF DEBUG PRINT CODE TO INSERT ---
         title = doc.metadata.get('title')
         start_str = str(doc.metadata.get('start_date_meta', '')).strip()
         end_str = str(doc.metadata.get('end_date_meta', '')).strip()
