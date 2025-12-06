@@ -24,7 +24,7 @@ def _parse_date_string(date_str: str, year: int) -> Optional[date]:
     """Robustly parses a date string into a datetime.date object."""
     if not date_str:
         return None
-    DATE_FORMATS = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d"]
+    DATE_FORMATS = ["%B %d, %Y", "%B %d", "%d %B", "%d %b", "%d.%m.%y", "%d.%m.%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"]
     
     for fmt in DATE_FORMATS:
         try:
