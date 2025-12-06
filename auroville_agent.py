@@ -350,16 +350,21 @@ def search_auroville_events(
             is_match = False
             
             # 1. Check strict date range (if available)
-            if doc_start_date and doc_end_date:
-                if doc_start_date <= query_date_obj <= doc_end_date:
+            if query_date_obj:
+                is_match = False
+        
+            # CASE 1: Document has specific dates (The Fix for Dec 13th)
+            if doc_start_date: 
+                doc_end = doc_end_date if doc_end_date else doc_start_date
+                if doc_start_date <= query_date_obj <= doc_end:
                     is_match = True
-            
-            # 2. If no date range, check Day of Week (e.g., "Friday")
+
+            # CASE 2: Safe Fallback for TRUE Recurring (Weekly/Daily) Events
             elif day_val:
-                query_day_short = query_date_obj.strftime("%a").lower() # e.g., 'fri'
+                query_day_short = query_date_obj.strftime("%a").lower() 
                 if query_day_short in day_val.lower():
                     is_match = True
-            
+                
             if not is_match:
                 continue
 
